@@ -1,9 +1,16 @@
 #!/usr/bin/env python3
 """
-Single 2×2 debug canvas per frame: raw radar BEV | labels viz | CIPO viz | legend.
+Single 2×2 debug canvas per frame:
+
+  TL — raw radar BEV (all points)
+  TR — curvature path + detected point/cluster (BEV)
+  BL — FOV search on radar BEV (AutoSpeed azimuth ray + association), no camera overlay
+  BR — AutoSpeed detections: all bounding boxes on camera
 
 Outputs under {zod_root}/output/{seq}/debug/images/ (one PNG per sampled frame).
-Replaces separate debug_labels_viz and debug_cipo_radar_viz.
+
+Path search range matches ``run_cipo_radar`` (``_MAX_RANGE_PATH_SEARCH_M`` = 200 m).
+Green path polyline is drawn for arc length ``s`` in ``[0, _PATH_DRAW_MAX_M]`` (= BEV forward extent, 150 m).
 """
 
 from __future__ import annotations
@@ -28,6 +35,16 @@ except ImportError:
     from inference.auto_speed_infer import AutoSpeedNetworkInfer
 
 try:
+    from Models.visualizations.AutoSpeed.image_visualization import color_map as AUTOSPEED_COLOR_MAP
+except ImportError:
+    # BGR — same as image_visualization.py (do not change)
+    AUTOSPEED_COLOR_MAP = {
+        1: (0, 0, 255),  # red
+        2: (0, 255, 255),  # yellow
+        3: (255, 255, 0),  # cyan
+    }
+
+try:
     from sklearn.cluster import DBSCAN
 except ImportError:
     DBSCAN = None
@@ -38,6 +55,10 @@ _LAT_BUFFER_PATH_M = 1.0
 _BEV_X_RANGE = (0, 150)
 _BEV_Y_RANGE = (-40, 40)
 _BEV_SCALE = 6  # pixels per meter — large BEV panels
+# Green path polyline: arc length parameter s in [0, max_dist] (meters forward along path)
+_PATH_DRAW_MAX_M = float(_BEV_X_RANGE[1])  # match BEV forward extent (was 100 default — clipped path vs radar)
+# Same as run_cipo_radar._MAX_RANGE_M — path search ignores returns beyond this range
+_MAX_RANGE_PATH_SEARCH_M = 200.0
 
 
 # --- geometry & radar ----------------------------------------------------------
@@ -52,7 +73,9 @@ def radar_spherical_to_cartesian(pts):
     return x, y, z
 
 
-def path_points_from_curvature(curvature_inv_m: float, max_dist: float = 100, n_pts: int = 100):
+def path_points_from_curvature(curvature_inv_m: float, max_dist: float = None, n_pts: int = 100):
+    if max_dist is None:
+        max_dist = _PATH_DRAW_MAX_M
     k = curvature_inv_m
     if abs(k) < 1e-6:
         return [(s, 0.0) for s in np.linspace(0, max_dist, n_pts)]
@@ -92,8 +115,10 @@ def get_radar_xy_and_clusters(radar_data, ts_ns, z_min=-0.5, z_max=1.0, range_sc
     x_f, y_f = x[mask], y[mask]
     xy = np.column_stack([x_f, y_f])
     pts_f = pts[mask]
-    if len(xy) == 0 or DBSCAN is None:
+    if len(xy) == 0:
         return xy, np.zeros(len(xy), dtype=int), pts_f, []
+    if DBSCAN is None:
+        raise RuntimeError("DBSCAN unavailable (scikit-learn not installed). Install `scikit-learn`.")
 
     rg = pts_f["radar_range"].astype(np.float64)
     az = pts_f["azimuth_angle"].astype(np.float64)
@@ -130,7 +155,11 @@ def _path_azimuth_at_range(curvature_inv_m: float, range_m: float) -> float:
 def find_cluster_on_path_direct(
     radar_data, ts_ns, curvature_inv_m, pts_f_ref, lat_buffer_m=1.0,
     z_min=-0.5, z_max=1.0, range_gap_m=4.0, vel_gap_ms=3.0, min_pts=2,
+    max_range_m: float = None,
 ):
+    """Path search — matches run_cipo_radar.find_cluster_on_path_direct (incl. max range gate)."""
+    if max_range_m is None:
+        max_range_m = _MAX_RANGE_PATH_SEARCH_M
     if len(pts_f_ref) == 0:
         return None, None
     rg = pts_f_ref["radar_range"].astype(np.float64)
@@ -138,6 +167,8 @@ def find_cluster_on_path_direct(
     rr = pts_f_ref["range_rate"].astype(np.float64)
     on_path = []
     for i in range(len(pts_f_ref)):
+        if rg[i] > max_range_m:
+            continue
         az_path = _path_azimuth_at_range(curvature_inv_m, rg[i])
         daz = abs(np.angle(np.exp(1j * (az[i] - az_path))))
         d_lateral = rg[i] * abs(np.sin(daz))
@@ -189,6 +220,39 @@ def find_nearest_cluster_lateral(clusters, azimuth_radar, lat_buffer_m=0.5):
 
 # --- BEV drawing --------------------------------------------------------------
 
+def _bev_strong_radar_circles(bev, to_pixel, xy, indices, fill_bgr, radius=14, ring_thickness=3):
+    """Highlight actual radar returns (rows of xy) with a filled disk + white ring."""
+    if indices is None:
+        return
+    for i in indices:
+        if i < 0 or i >= len(xy):
+            continue
+        r, c = to_pixel(float(xy[i, 0]), float(xy[i, 1]))
+        cv2.circle(bev, (c, r), radius + 2, (0, 0, 0), -1, lineType=cv2.LINE_AA)
+        cv2.circle(bev, (c, r), radius, fill_bgr, -1, lineType=cv2.LINE_AA)
+        cv2.circle(bev, (c, r), radius + 4, (255, 255, 255), ring_thickness, lineType=cv2.LINE_AA)
+
+
+def _bev_draw_curvature_path(bev, to_pixel, curvature_inv_m, max_dist_m=None):
+    """Draw path *under* radar points — dark stroke then bright center so it stays visible when points are drawn on top."""
+    if curvature_inv_m is None:
+        return
+    md = max_dist_m if max_dist_m is not None else _PATH_DRAW_MAX_M
+    path_pts = path_points_from_curvature(curvature_inv_m, max_dist=md)
+    for i in range(len(path_pts) - 1):
+        r1, c1 = to_pixel(path_pts[i][0], path_pts[i][1])
+        r2, c2 = to_pixel(path_pts[i + 1][0], path_pts[i + 1][1])
+        cv2.line(bev, (c1, r1), (c2, r2), (0, 45, 0), 4, cv2.LINE_AA)
+        cv2.line(bev, (c1, r1), (c2, r2), (0, 230, 0), 2, cv2.LINE_AA)
+
+
+def _bev_draw_radar_points_small(bev, to_pixel, xy, radius=3, bgr=(120, 120, 120)):
+    """All returns on top of path/FOV lines so they are not covered."""
+    for i in range(len(xy)):
+        r, c = to_pixel(xy[i, 0], xy[i, 1])
+        cv2.circle(bev, (c, r), radius, bgr, -1, lineType=cv2.LINE_AA)
+
+
 def draw_bev_raw(xy, scale=_BEV_SCALE, x_range=_BEV_X_RANGE, y_range=_BEV_Y_RANGE):
     """All radar returns only — grid, gray points, ego. 0–150 m forward."""
     x_range = x_range or _BEV_X_RANGE
@@ -223,10 +287,16 @@ def draw_bev_raw(xy, scale=_BEV_SCALE, x_range=_BEV_X_RANGE, y_range=_BEV_Y_RANG
     return bev
 
 
-def draw_bev_with_labeled_dot(
-    xy, labeled_x, labeled_y, scale=_BEV_SCALE, x_range=None, y_range=None,
-    curvature_inv_m=None, radar_bev_xy=None,
+def draw_bev_path_detected(
+    xy,
+    curvature_inv_m=None,
+    detected_xy=None,
+    path_strong_indices=None,
+    scale=_BEV_SCALE,
+    x_range=None,
+    y_range=None,
 ):
+    """Curvature path + radar points. Path-based association: strong circles on actual radar rows (path_strong_indices)."""
     x_range = x_range or _BEV_X_RANGE
     y_range = y_range or _BEV_Y_RANGE
     bev_h = int((x_range[1] - x_range[0]) * scale)
@@ -246,36 +316,38 @@ def draw_bev_with_labeled_dot(
         r, c = to_pixel(x_range[0], y)
         cv2.line(bev, (c, 0), (c, bev_h - 1), (55, 55, 55), 1)
 
-    for i in range(len(xy)):
-        r, c = to_pixel(xy[i, 0], xy[i, 1])
-        cv2.circle(bev, (c, r), 2, (85, 85, 85), -1)
+    # Lines first, then radar points on top (avoids green path hiding gray dots)
+    _bev_draw_curvature_path(bev, to_pixel, curvature_inv_m)
 
-    if curvature_inv_m is not None:
-        path_pts = path_points_from_curvature(curvature_inv_m)
-        for i in range(len(path_pts) - 1):
-            r1, c1 = to_pixel(path_pts[i][0], path_pts[i][1])
-            r2, c2 = to_pixel(path_pts[i + 1][0], path_pts[i + 1][1])
-            cv2.line(bev, (c1, r1), (c2, r2), (0, 255, 0), 2)
-        cv2.putText(bev, f"path k={curvature_inv_m:.3f}", (5, 58), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 1)
+    _bev_draw_radar_points_small(bev, to_pixel, xy, radius=3, bgr=(110, 110, 110))
 
-    if labeled_x is not None and labeled_y is not None and not (np.isnan(labeled_x) or np.isnan(labeled_y)):
-        r, c = to_pixel(labeled_x, labeled_y)
-        cv2.circle(bev, (c, r), 3, (0, 255, 255), -1)
-        cv2.circle(bev, (c, r), 4, (255, 255, 255), 1)
-
-    if radar_bev_xy is not None and len(radar_bev_xy) >= 2:
-        rx, ry = float(radar_bev_xy[0]), float(radar_bev_xy[1])
-        if not (np.isnan(rx) or np.isnan(ry)):
-            r, c = to_pixel(rx, ry)
-            cv2.circle(bev, (c, r), 3, (255, 255, 0), -1)
-            cv2.circle(bev, (c, r), 4, (255, 255, 255), 1)
+    # Path / curvature association: strong rings on real radar points (indices into xy)
+    if path_strong_indices is not None and len(path_strong_indices) > 0:
+        _bev_strong_radar_circles(bev, to_pixel, xy, path_strong_indices, fill_bgr=(0, 220, 255), radius=15, ring_thickness=3)
+    elif detected_xy is not None and len(detected_xy) >= 2:
+        dx, dy = float(detected_xy[0]), float(detected_xy[1])
+        if not (np.isnan(dx) or np.isnan(dy)):
+            r, c = to_pixel(dx, dy)
+            cv2.circle(bev, (c, r), 12, (0, 0, 0), -1, lineType=cv2.LINE_AA)
+            cv2.circle(bev, (c, r), 10, (0, 200, 220), -1, lineType=cv2.LINE_AA)
+            cv2.circle(bev, (c, r), 14, (255, 255, 255), 2, lineType=cv2.LINE_AA)
 
     r0, c0 = to_pixel(0, 0)
-    cv2.circle(bev, (c0, r0), 8, (0, 255, 255), -1)
+    cv2.circle(bev, (c0, r0), 8, (0, 200, 255), -1)
     cv2.circle(bev, (c0, r0), 10, (255, 255, 255), 2)
 
-    cv2.putText(bev, "Labels BEV (GT check)", (5, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
-    leg = "gray=radar  yellow=label  cyan=CIPO pt  green=path"
+    cv2.putText(bev, "Path + detected (BEV)", (5, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
+    if curvature_inv_m is not None:
+        cv2.putText(
+            bev,
+            f"path k={curvature_inv_m:.3f}  arc s in [0,{_PATH_DRAW_MAX_M:.0f}] m",
+            (5, 40),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.38,
+            (0, 230, 0),
+            1,
+        )
+    leg = "path match: bold rings on radar pts" if path_strong_indices else "gray=radar  green=path"
     cv2.putText(bev, leg, (5, bev_h - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (150, 150, 150), 1)
     return bev
 
@@ -291,8 +363,8 @@ def draw_bev_association_fov(
     path_only=False,
 ):
     """
-    BEV for BR panel: radar points, ego path, association — **no** lateral-buffer polygons.
-    Azimuth: single yellow line along the CIPO/path ray (not dotted “fox” corridor).
+    BEV FOV panel: radar points, ego path, association — **no** lateral-buffer polygons.
+    Azimuth: single line along the AutoSpeed→radar ray (when CIPO).
     """
     x_range = x_range or _BEV_X_RANGE
     y_range = y_range or _BEV_Y_RANGE
@@ -313,66 +385,60 @@ def draw_bev_association_fov(
         r, c = to_pixel(x_range[0], y)
         cv2.line(bev, (c, 0), (c, bev_h - 1), (55, 55, 55), 1)
 
-    for i in range(len(xy)):
-        r, c = to_pixel(xy[i, 0], xy[i, 1])
-        cv2.circle(bev, (c, r), 2, (85, 85, 85), -1)
-
-    if curvature_inv_m is not None:
-        path_pts = path_points_from_curvature(curvature_inv_m)
-        for i in range(len(path_pts) - 1):
-            r1, c1 = to_pixel(path_pts[i][0], path_pts[i][1])
-            r2, c2 = to_pixel(path_pts[i + 1][0], path_pts[i + 1][1])
-            cv2.line(bev, (c1, r1), (c2, r2), (0, 255, 0), 2)
-        cv2.putText(bev, f"path k={curvature_inv_m:.3f}", (5, 58), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 1)
+    _bev_draw_curvature_path(bev, to_pixel, curvature_inv_m)
 
     if not path_only:
         az_rad = np.deg2rad(az_radar_deg)
         r0, c0 = to_pixel(0, 0)
         r1, c1 = to_pixel(120 * np.cos(az_rad), 120 * np.sin(az_rad))
-        cv2.line(bev, (c0, r0), (c1, r1), (0, 220, 255), 3)
+        cv2.line(bev, (c0, r0), (c1, r1), (0, 80, 120), 6, cv2.LINE_AA)
+        cv2.line(bev, (c0, r0), (c1, r1), (0, 220, 255), 3, cv2.LINE_AA)
 
-    if matched_indices is not None:
-        for i in matched_indices:
-            r, c = to_pixel(xy[i, 0], xy[i, 1])
-            cv2.circle(bev, (c, r), 7, (0, 255, 0), -1)
-            cv2.circle(bev, (c, r), 9, (255, 255, 255), 2)
+    _bev_draw_radar_points_small(bev, to_pixel, xy, radius=3, bgr=(110, 110, 110))
+
+    # FOV / path cluster: strong rings on matched radar returns (actual points, not centroid)
+    if matched_indices is not None and len(matched_indices) > 0:
+        fill = (60, 220, 80) if path_only else (0, 255, 100)
+        _bev_strong_radar_circles(bev, to_pixel, xy, matched_indices, fill_bgr=fill, radius=15, ring_thickness=3)
 
     r_ego, c_ego = to_pixel(0, 0)
     cv2.circle(bev, (c_ego, r_ego), 8, (0, 255, 255), -1)
     cv2.circle(bev, (c_ego, r_ego), 10, (255, 255, 255), 2)
 
-    cv2.putText(bev, "Assoc BEV (FOV ray, no buffer)", (5, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (200, 200, 200), 1)
+    cv2.putText(bev, "FOV search (BEV)", (5, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (200, 200, 200), 1)
+    if curvature_inv_m is not None:
+        cv2.putText(
+            bev,
+            f"path k={curvature_inv_m:.3f}  arc s in [0,{_PATH_DRAW_MAX_M:.0f}] m",
+            (5, 76),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.34,
+            (0, 230, 0),
+            1,
+        )
     if path_only:
-        cv2.putText(bev, "path + moving radar", (5, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (120, 200, 200), 1)
+        cv2.putText(bev, "no CIPO — path + on-path cluster (rings)", (5, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (120, 200, 200), 1)
     else:
-        cv2.putText(bev, f"az {az_radar_deg:.1f} deg", (5, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (0, 220, 255), 1)
+        cv2.putText(bev, f"az {az_radar_deg:.1f} deg (AutoSpeed→radar)  rings=match", (5, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (0, 220, 255), 1)
     return bev
 
 
-def render_fov_cipo_camera(img_bgr, preds, W: int, H: int):
-    """
-    BR top strip: camera FOV wedge only (no class bboxes / scores). CIPO foot point: bold circle if L1/L2 exists.
-    """
+def render_autospeed_all_boxes(img_bgr, preds):
+    """Every AutoSpeed box — colors from image_visualization.color_map (BGR)."""
     img = img_bgr.copy()
-    cx = W // 2
-    apex_y = H - 12
-    top_y = max(24, int(H * 0.22))
-    # Horizontal FOV guide: left / center / right from near bumper
-    cv2.line(img, (cx, apex_y), (0, top_y), (140, 190, 255), 2, cv2.LINE_AA)
-    cv2.line(img, (cx, apex_y), (W - 1, top_y), (140, 190, 255), 2, cv2.LINE_AA)
-    cv2.line(img, (cx, apex_y), (cx, top_y), (90, 90, 110), 1, cv2.LINE_AA)
-
-    CIPO_CLASSES = (1, 2)
-    cipo = [p for p in preds if int(p[5]) in CIPO_CLASSES]
-    if cipo:
-        cipo.sort(key=lambda p: (p[1] + p[3]) / 2, reverse=True)
-        x1, y1, x2, y2, _, _ = cipo[0]
-        u, v = int((x1 + x2) / 2), int(y2)
-        cv2.circle(img, (u, v), 22, (0, 255, 0), 4)
-        cv2.circle(img, (u, v), 10, (0, 255, 255), -1)
-        cv2.circle(img, (u, v), 22, (255, 255, 255), 2)
-
-    cv2.putText(img, "Camera: FOV wedge + CIPO contact", (10, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.62, (230, 230, 230), 1)
+    cv2.putText(img, "AutoSpeed — all boxes", (10, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (240, 240, 240), 2)
+    if not preds:
+        cv2.putText(img, "(no detections above conf)", (10, 56), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (160, 160, 160), 1)
+        return img
+    for p in preds:
+        x1, y1, x2, y2, score, cls = p
+        ci = int(cls)
+        col = AUTOSPEED_COLOR_MAP.get(ci, (255, 255, 255))
+        x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
+        cv2.rectangle(img, (x1, y1), (x2, y2), col, 2)
+        lab = f"{ci}:{float(score):.2f}"
+        ty = max(18, y1 - 4)
+        cv2.putText(img, lab, (x1, ty), cv2.FONT_HERSHEY_SIMPLEX, 0.45, col, 1)
     return img
 
 
@@ -386,57 +452,10 @@ def resize_fit(img: np.ndarray, max_w: int, max_h: int) -> np.ndarray:
     return cv2.resize(img, (nw, nh), interpolation=cv2.INTER_AREA if scale < 1 else cv2.INTER_LINEAR)
 
 
-def pad_to_size(img: np.ndarray, tw: int, th: int, fill=(20, 20, 20)) -> np.ndarray:
-    h, w = img.shape[:2]
-    out = np.full((th, tw, 3), fill, dtype=np.uint8)
-    y0 = (th - h) // 2
-    x0 = (tw - w) // 2
-    out[y0 : y0 + h, x0 : x0 + w] = img
-    return out
-
-
-def render_labels_camera(img_bgr, cipo_rec, label: dict, seq: str, stem: str) -> np.ndarray:
-    """Camera strip with label overlays (debug_labels style)."""
-    img = img_bgr.copy()
-    if cipo_rec.get("cipo_detected") and "bbox" in cipo_rec:
-        x1, y1, x2, y2 = [int(v) for v in cipo_rec["bbox"]]
-        cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
-        cv2.putText(img, "CIPO", (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-    px = cipo_rec.get("pixel_point")
-    if px is not None and len(px) >= 2:
-        cv2.circle(img, (int(px[0]), int(px[1])), 6, (0, 255, 255), 2)
-
-    curvature = label.get("curvature")
-    dist = label.get("distance_to_in_path_object")
-    speed = label.get("speed_of_in_path_object")
-    curv_str = f"{curvature:.4f}" if curvature is not None and isinstance(curvature, (int, float)) else "-"
-
-    cipo_dist = cipo_rec.get("distance_m")
-    cipo_speed_adj = cipo_rec.get("speed_ms_adjusted")
-    lines = [
-        "LABELS (camera)",
-        f"k: {curv_str}",
-        f"dist: {dist} m" if dist is not None else "dist: -",
-        f"spd: {speed}" if speed is not None else "spd: -",
-    ]
-    if cipo_dist is not None or cipo_speed_adj is not None:
-        t = f"radar: {cipo_dist}m" if cipo_dist is not None else "radar: -"
-        if cipo_speed_adj is not None:
-            t += f"  v_adj={cipo_speed_adj:.1f}"
-        lines.append(t)
-
-    cv2.rectangle(img, (0, 0), (img.shape[1], 32 + len(lines) * 28), (40, 40, 40), -1)
-    for i, line in enumerate(lines):
-        cv2.putText(img, line, (16, 28 + i * 28), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 255, 0), 2)
-    suf = " (prev)" if cipo_rec.get("track_from_prev") else (" (nb)" if cipo_rec.get("track_from_neighbor") else (" (path)" if cipo_rec.get("cipo_from_path") else ""))
-    cv2.putText(img, f"{seq}  {stem}{suf}", (16, img.shape[0] - 12), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (180, 180, 180), 1)
-    return img
-
-
 # --- main ---------------------------------------------------------------------
 
 def main():
-    parser = argparse.ArgumentParser(description="2x2 ZOD debug grid (raw radar | labels | cipo)")
+    parser = argparse.ArgumentParser(description="2x2 ZOD debug grid: raw BEV | path+detected | FOV BEV | AutoSpeed boxes")
     parser.add_argument("--sequence", type=str, default="000479")
     parser.add_argument("--zod-root", type=str, required=True)
     parser.add_argument("--every", type=int, default=20, help="Process every Nth frame")
@@ -524,37 +543,28 @@ def main():
 
         panel_tl = draw_bev_raw(xy, scale=_BEV_SCALE)
 
-        dist = label.get("distance_to_in_path_object")
-        az_deg = cipo_rec.get("azimuth_radar_deg")
-        labeled_x = labeled_y = None
-        if dist is not None and az_deg is not None:
-            if not (np.isnan(dist) or np.isnan(az_deg)):
-                az_rad = np.deg2rad(az_deg)
-                labeled_x = float(dist * np.cos(az_rad))
-                labeled_y = float(dist * np.sin(az_rad))
-        curv = label.get("curvature") or rec.get("curvature_inv_m")
-        panel_tr = draw_bev_with_labeled_dot(
-            xy, labeled_x, labeled_y,
-            curvature_inv_m=curv,
-            radar_bev_xy=cipo_rec.get("bev_xy"),
-        )
+        curv = label.get("curvature")
+        if curv is None:
+            curv = rec.get("curvature_inv_m")
+        curvature = float(curv) if curv is not None else 0.0
 
-        panel_bl = render_labels_camera(img_bgr, cipo_rec, label, seq, stem)
-
-        xy_c, labels_c, pts_f, clusters = get_radar_xy_and_clusters(
+        xy_c, _labels_c, pts_f, clusters = get_radar_xy_and_clusters(
             radar_data, rec["radar_timestamp_ns"], lat_buffer=_LAT_BUFFER_M
         )
         cipo = [p for p in preds if int(p[5]) in CIPO_CLASSES]
+
+        cluster_path, matched_path = None, None
+        matched_indices = None
+        az_radar_deg = 0.0
+
         if not cipo:
-            curvature = rec.get("curvature_inv_m", 0.0)
             cluster_path, matched_path = find_cluster_on_path_direct(
                 radar_data, rec["radar_timestamp_ns"], curvature, pts_f, lat_buffer_m=_LAT_BUFFER_PATH_M,
             )
-            bev_cipo = draw_bev_association_fov(
+            panel_bl = draw_bev_association_fov(
                 xy_c, matched_path, 0.0,
                 curvature_inv_m=curvature, path_only=True,
             )
-            cam_cipo = render_fov_cipo_camera(img_bgr, preds, W, H)
         else:
             cipo.sort(key=lambda p: (p[1] + p[3]) / 2, reverse=True)
             x1, y1, x2, y2, _, _ = cipo[0]
@@ -564,23 +574,42 @@ def main():
             az_radar_deg = float(np.rad2deg(az_radar))
             cluster, _ = find_nearest_cluster_lateral(clusters, az_radar, lat_buffer_m=_LAT_BUFFER_M)
             matched_indices = cluster["indices"].tolist() if cluster else None
-            curvature = rec.get("curvature_inv_m")
-            bev_cipo = draw_bev_association_fov(
+            panel_bl = draw_bev_association_fov(
                 xy_c, matched_indices, az_radar_deg,
                 curvature_inv_m=curvature, path_only=False,
             )
-            cam_cipo = render_fov_cipo_camera(img_bgr, preds, W, H)
 
-        # BR quadrant: CIPO camera (top) + CIPO BEV (bottom) → resize to cm×cm
-        hh = max(1, cm // 2)
-        cam_s = pad_to_size(resize_fit(cam_cipo, cm, hh), cm, hh)
-        bev_s = pad_to_size(resize_fit(bev_cipo, cm, hh), cm, hh)
-        panel_br = np.vstack([cam_s, bev_s])
-        panel_br = cv2.resize(panel_br, (cm, cm), interpolation=cv2.INTER_AREA)
+        # TR: strong rings on real radar points for path-only; CIPO case uses optional bev_xy dot (FOV rings are BL)
+        path_strong = None
+        if not cipo and matched_path is not None and len(matched_path) > 0:
+            path_strong = [int(i) for i in matched_path]
+
+        tr_detected_xy = None
+        if path_strong is None:
+            bx = cipo_rec.get("bev_xy")
+            if bx is not None and len(bx) >= 2:
+                tr_detected_xy = (float(bx[0]), float(bx[1]))
+            elif not cipo:
+                if matched_path is not None and len(matched_path) > 0:
+                    tr_detected_xy = tuple(np.mean(xy_c[matched_path], axis=0).tolist())
+                elif cluster_path is not None:
+                    rg = float(cluster_path["range"])
+                    az = float(cluster_path["azimuth"])
+                    tr_detected_xy = (rg * np.cos(az), rg * np.sin(az))
+            # CIPO + FOV: strong radar rings only in panel BL, not centroid here
+
+        panel_tr = draw_bev_path_detected(
+            xy,
+            curvature_inv_m=curvature,
+            detected_xy=tr_detected_xy,
+            path_strong_indices=path_strong,
+        )
+        panel_br = render_autospeed_all_boxes(img_bgr, preds)
 
         panel_tl = cv2.resize(resize_fit(panel_tl, cm, cm), (cm, cm), interpolation=cv2.INTER_AREA)
         panel_tr = cv2.resize(resize_fit(panel_tr, cm, cm), (cm, cm), interpolation=cv2.INTER_AREA)
         panel_bl = cv2.resize(resize_fit(panel_bl, cm, cm), (cm, cm), interpolation=cv2.INTER_AREA)
+        panel_br = cv2.resize(resize_fit(panel_br, cm, cm), (cm, cm), interpolation=cv2.INTER_AREA)
 
         top = np.hstack([panel_tl, panel_tr])
         bot = np.hstack([panel_bl, panel_br])
@@ -588,7 +617,7 @@ def main():
 
         banner_h = 44
         banner = np.full((banner_h, canvas.shape[1], 3), 32, dtype=np.uint8)
-        title = f"ZOD 2x2  seq {seq}  frame {idx}  {stem}   | TL raw  TR labels BEV  BL labels cam  BR FOV+CIPO / assoc BEV"
+        title = f"ZOD 2x2  seq {seq}  frame {idx}  {stem}   | TL raw BEV  TR path+detected  BL FOV BEV  BR AutoSpeed boxes"
         cv2.putText(banner, title[: min(180, len(title))], (12, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.62, (220, 220, 220), 1)
         canvas = np.vstack([banner, canvas])
 
