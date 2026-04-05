@@ -77,24 +77,42 @@ def generate_labels(seq: str, zod_root: Path, cipo_radar_path: Path) -> bool:
         steering = rec.get("steering_angle_rad", 0.0) or 0.0
         tyre = float(steering) / _STEERING_COLUMN_RATIO
 
-        label = {
-            # Timestamps
-            "image_timestamp_ns": rec.get("image_timestamp_ns"),
-            "radar_timestamp_ns": rec.get("radar_timestamp_ns"),
-            # Ackermann steering / path
-            "steering_angle_rad": rec.get("steering_angle_rad"),
-            "tyre_angle_rad": round(tyre, 7),
-            "curvature": rec.get("curvature_inv_m"),
-            "ego_speed_ms": rec.get("ego_speed_ms"),
-            # Detection
-            "cipo_detected": cipo_rec.get("cipo_detected"),
-            "cipo_scenario": cipo_rec.get("cipo_scenario"),
-            "cipo_from_path": cipo_rec.get("cipo_from_path"),
-            "azimuth_radar_deg": cipo_rec.get("azimuth_radar_deg"),
-            # Labels (ground truth values)
-            "distance_to_in_path_object": cipo_rec.get("distance_m"),
-            "speed_of_in_path_object": cipo_rec.get("speed_ms"),
-        }
+        # Exact mirror of the per-image record in `cipo_radar.json`.
+        # This way labels/{seq}/*.json can be used directly for annotations.
+        label = dict(cipo_rec)
+        if label:
+            # Ensure steering/tyre/aliases exist for older runs.
+            label.setdefault("steering_angle_rad", rec.get("steering_angle_rad"))
+            label.setdefault("tyre_angle_rad", round(tyre, 7))
+            label.setdefault("ego_speed_ms", rec.get("ego_speed_ms"))
+            if label.get("curvature") is None:
+                label["curvature"] = label.get("curvature_inv_m", rec.get("curvature_inv_m"))
+            label.setdefault("distance_to_in_path_object", label.get("distance_m"))
+            label.setdefault("speed_of_in_path_object", label.get("speed_ms"))
+        else:
+            # Fallback minimal schema (should be rare if cipo_radar covers all frames).
+            label = {
+                "image": img,
+                "image_timestamp_ns": rec.get("image_timestamp_ns"),
+                "radar_timestamp_ns": rec.get("radar_timestamp_ns"),
+                "steering_angle_rad": rec.get("steering_angle_rad"),
+                "tyre_angle_rad": round(tyre, 7),
+                "curvature_inv_m": rec.get("curvature_inv_m"),
+                "curvature": rec.get("curvature_inv_m"),
+                "ego_speed_ms": rec.get("ego_speed_ms"),
+                "cipo_detected": False,
+                "cipo_scenario": None,
+                "cipo_from_path": None,
+                "azimuth_radar_deg": None,
+                "distance_m": None,
+                "speed_ms": None,
+                "pixel_point": None,
+                "bbox": None,
+                "bev_xy": None,
+                "speed_ms_adjusted": None,
+                "distance_to_in_path_object": None,
+                "speed_of_in_path_object": None,
+            }
         out_name = Path(img).stem + ".json"
         out_path = out_dir / out_name
         with open(out_path, "w") as f:
@@ -263,24 +281,23 @@ def _run_pipeline_for_seq(seq: str, zod: Path, output_dir: Path, args) -> bool:
         print("CIPO-radar failed")
         return False
 
-    # Step 3: labels
+    # Step 3: labels (per-image JSONs) for training/annotation convenience.
     if not args.skip_labels:
         generate_labels(seq, zod, cipo_path)
     else:
-        print("[3/4] Skipping label generation")
+        print("[3/4] Skipped label generation (--skip-labels).")
 
-    # Step 4: 2x2 debug grid (requires labels)
-    if not args.skip_viz and not args.skip_labels and not getattr(args, "skip_debug", False):
+    # Step 4: 2x2 debug grid (works even without labels; falls back to curvature_inv_m).
+    if not args.skip_viz and not getattr(args, "skip_debug", False):
         run_debug_grid(seq, zod, output_dir, cipo_path, every=args.every, model_path=args.model_path)
     else:
-        print("[4/4] Skipping debug grid (use labels + inference)")
+        print("[4/4] Skipping debug grid")
 
     print(f"\nDone. Sequence {seq}:")
     print(f"  Associations: {assoc_path}")
     print(f"  Output:      {output_dir}")
     print(f"    cipo_radar:  {cipo_path}")
     print(f"    debug grid:  {output_dir / 'debug' / 'images'}")
-    print(f"  Labels:      {zod / 'labels' / seq}")
     return True
 
 

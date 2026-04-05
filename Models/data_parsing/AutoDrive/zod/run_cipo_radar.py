@@ -857,6 +857,13 @@ def main():
         if n_filled > 0:
             print(f"  No-CIPO temporal fill iter {iter_count}: filled {n_filled} frames", flush=True)
 
+    # Union output: add label-style aliases into the final cipo_radar.json.
+    # This lets you use `cipo_radar.json` directly for annotations without needing the labels/ folder.
+    for r in results:
+        r.setdefault("curvature", r.get("curvature_inv_m"))
+        r.setdefault("distance_to_in_path_object", r.get("distance_m"))
+        r.setdefault("speed_of_in_path_object", r.get("speed_ms"))
+
     with open(out_path, "w") as f:
         json.dump({"sequence": seq, "results": results}, f, indent=2)
     print(f"Saved {len(results)} results to {out_path}")

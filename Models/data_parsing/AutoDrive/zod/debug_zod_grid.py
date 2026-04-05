@@ -494,9 +494,7 @@ def main():
     if not cipo_path.exists():
         print(f"Missing cipo_radar: {cipo_path}")
         return 1
-    if not labels_dir.exists():
-        print(f"Missing labels dir: {labels_dir}")
-        return 1
+    labels_dir_exists = labels_dir.exists()
 
     with open(assoc_path) as f:
         assoc = json.load(f)
@@ -524,26 +522,32 @@ def main():
         img_name = rec["image"]
         stem = Path(img_name).stem
         img_path = img_dir / img_name
+        label = None
         label_path = labels_dir / f"{stem}.json"
-        if not img_path.exists() or not label_path.exists():
+        if labels_dir_exists and label_path.exists():
+            with open(label_path) as f:
+                label = json.load(f)
+        if not img_path.exists():
             continue
-
-        with open(label_path) as f:
-            label = json.load(f)
         cipo_rec = cipo_map.get(img_name, {})
 
         img_pil = Image.open(img_path).convert("RGB")
         img_bgr = cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
         preds = model.inference(img_pil)
 
-        pts = radar_data[radar_data["timestamp"] == rec["radar_timestamp_ns"]]
+        ts = np.asarray(radar_data["timestamp"])
+        rts = rec["radar_timestamp_ns"]
+        if np.issubdtype(ts.dtype, np.floating):
+            pts = radar_data[np.round(ts).astype(np.int64) == np.int64(rts)]
+        else:
+            pts = radar_data[ts.astype(np.int64) == np.int64(rts)]
         x, y, z = radar_spherical_to_cartesian(pts)
         mask = (z >= -0.5) & (z <= 1.0)
         xy = np.column_stack([x[mask], y[mask]])
 
         panel_tl = draw_bev_raw(xy, scale=_BEV_SCALE)
 
-        curv = label.get("curvature")
+        curv = label.get("curvature") if label is not None else None
         if curv is None:
             curv = rec.get("curvature_inv_m")
         curvature = float(curv) if curv is not None else 0.0
