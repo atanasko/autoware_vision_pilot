@@ -11,6 +11,10 @@ The AutoSpeed model detects all foreground objects and classifies objects into t
 ### Demo Video
 [![Watch the Video](../../../Media/AutoSpeed_2_thumbnail.jpg)](https://drive.google.com/file/d/1ehH3nRKsZLmPqZsqoqFuwyx6HCy2EVxe/preview)
 
+## Get Started
+
+To easily try out the model on your own images and videos, please follow the steps in the [tutorial](tutorial.ipynb). For the best results, please ensure that your input video matches the aspect ratio of the model.
+
 ### Performance Results
 
 The AutoSpeed network is trained on the [OpenLane](https://github.com/OpenDriveLab/OpenLane) dataset on the CIPO detection task. We modify the ground-truth labels by merging 'Level 3' and 'Level 4' category objects in the ground truth dataset into a single class. We use a 90:10 ratio for train:val split, and we achieve a **mAP@50 score of 0.74** and a **mAP score of 0.56** on validation data.
@@ -18,10 +22,10 @@ The AutoSpeed network is trained on the [OpenLane](https://github.com/OpenDriveL
 ## Model variants
 The AutoSpeed network is trained in two variants, the original AutoSpeed network processess frames in square aspect ratio with size 640px by 640px. AutoSpeed 2.0 processess frames in a 2:1 aspect ratio with size 512px by 1024 px, allowing for objects to be detected further away and a wider viewing angle of the scene which is more suited to autonomous driving applications.
 
-## AutoSpeed 2.0 model weights - 2:1 aspect ratio, 512px by 1024px input image
-### [Link to Download Pytorch Model Weights *.pth](https://drive.google.com/file/d/1iD-LKf5wSuvf0F5OHVHH3znGEvSIS8LY/view?usp=drive_link)
-### [Link to Download ONNX FP32 Weights *.onnx](https://drive.google.com/file/d/1Zhe8uXPbrPr8cvcwHkl1Hv0877HHbxbB/view?usp=drive_link)
+**AutoSpeed 2.0 model weights - 2:1 aspect ratio, 512px by 1024px input image**
+- [Link to Download Pytorch Model Weights *.pth](https://drive.google.com/file/d/1L8oiuszUKFmLZxsgIp1wtzgSkj2pr6n7/view?usp=drive_link)
+- [Link to Download ONNX FP32 Weights *.onnx](https://drive.google.com/file/d/1bKYsnKbHD8DvQB2w3x6yu0Htup4KL2l5/view?usp=drive_link)
 
-## AutoSpeed model weights - 1:1 aspect ratio, 640px by 640px input image
-### [Link to Download Pytorch Model Weights *.pth](https://drive.google.com/file/d/1iD-LKf5wSuvf0F5OHVHH3znGEvSIS8LY/view?usp=drive_link)
-### [Link to Download ONNX FP32 Weights *.onnx](https://drive.google.com/file/d/1Zhe8uXPbrPr8cvcwHkl1Hv0877HHbxbB/view?usp=drive_link)
+**AutoSpeed model weights - 1:1 aspect ratio, 640px by 640px input image**
+- [Link to Download Pytorch Model Weights (*.pth)](https://drive.google.com/file/d/1iD-LKf5wSuvf0F5OHVHH3znGEvSIS8LY/view?usp=drive_link)
+- [Link to Download ONNX FP32 Moel Height (*.onnx)](https://drive.google.com/file/d/1Zhe8uXPbrPr8cvcwHkl1Hv0877HHbxbB/view?usp=drive_link)
