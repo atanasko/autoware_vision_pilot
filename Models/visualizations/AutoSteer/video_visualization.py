@@ -24,14 +24,25 @@ def make_visualization(frame, xp, h_vector):
     l_h_vector = (l_h_vector >= 0.5).astype(int)
     l_xp = l_xp * l_h_vector
 
-    r_xp = xp[1] * 1024
-    r_h_vector = h_vector[1]
+    e_xp = xp[1] * 1024
+    e_h_vector = h_vector[0]
+    e_h_vector = (e_h_vector >= 0.5).astype(int)
+    e_xp = e_xp * e_h_vector
+
+    r_xp = xp[2] * 1024
+    r_h_vector = h_vector[2]
     r_h_vector = (r_h_vector >= 0.5).astype(int)
     r_xp = r_xp * r_h_vector
 
+    # Left
     for x, y, h in zip(l_xp, yp, l_h_vector):
         if h == 1:
             cv2.circle(frame, (int(x), int(y)), 3, (228, 186, 20), thickness=-1)
+    # Ego
+    for x, y, h in zip(e_xp, yp, e_h_vector):
+        if h == 1:
+            cv2.circle(frame, (int(x), int(y)), 3, (0, 255, 0), thickness=-1)
+    # Right
     for x, y, h in zip(r_xp, yp, r_h_vector):
         if h == 1:
             cv2.circle(frame, (int(x), int(y)), 3, (180,105, 255), thickness=-1)
@@ -72,12 +83,6 @@ def main():
     writer_obj = cv2.VideoWriter(output_filepath_obj,
                                  cv2.VideoWriter_fourcc(*"MJPG"), fps, (1024, 512))
 
-    # Ground Truth file path
-    # gt_file_path = args.ground_truth
-    # gt = None
-    # if gt_file_path is not None:
-    #     gt = load_ground_truth(gt_file_path)
-
     # Check if video catpure opened successfully
     if (cap.isOpened() == False):
         print("Error opening video stream or file")
@@ -98,25 +103,6 @@ def main():
             xp, h_vector = model.inference(frame)
 
             make_visualization(frame, xp, h_vector)
-            # yp = np.linspace(0, 511, 64, dtype=int)
-            # for i in range(xp.shape[0]):
-            #     l_xp = xp[i] * 1024
-            #     l_h_vector = h_vector[i]
-            #     l_h_vector = (l_h_vector >= 0.5).astype(int)
-            #     l_xp = l_xp * l_h_vector
-            #
-            #     r_xp = xp[i] * 1024
-            #     r_h_vector = h_vector[i]
-            #     r_h_vector = (r_h_vector >= 0.5).astype(int)
-            #     r_xp = r_xp * r_h_vector
-            #
-            #     for x, y, h in zip(l_xp, yp, l_h_vector):
-            #         if h == 1:
-            #             cv2.circle(frame, (int(x), int(y)), 2, (255, 0, 0), thickness=-1)
-            #     for x, y, h in zip(r_xp, yp, r_h_vector):
-            #         if h == 1:
-            #             cv2.circle(frame, (int(x), int(y)), 2, (255, 0, 0), thickness=-1)
-
             if (args.vis):
                 cv2.imshow('Prediction Objects', frame)
                 cv2.waitKey(10)

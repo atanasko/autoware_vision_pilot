@@ -29,13 +29,13 @@ class LoadDataAutoSteer(Dataset):
         sample = numpy.ascontiguousarray(sample)
 
         # xp
-        l_xp, r_xp = label["l_xp"], label["r_xp"]
-        target_xp = np.stack([l_xp, r_xp], axis=0)  # shape (2, 64)
+        l_xp, e_xp, r_xp = label["l_xp"], label["e_xp"], label["r_xp"]
+        target_xp = np.stack([l_xp, e_xp, r_xp], axis=0)  # shape (2, 64)
         target_xp = torch.from_numpy(target_xp[:, :, None])  # shape (2, 64, 1)
 
         # h_vector
-        l_h_vector, r_h_vector = label["l_h_vector"], label["r_h_vector"]
-        target_h_vector = np.stack([l_h_vector, r_h_vector], axis=0)  # shape (2, 64)
+        l_h_vector, e_h_vector, r_h_vector = label["l_h_vector"], label["e_h_vector"], label["r_h_vector"]
+        target_h_vector = np.stack([l_h_vector, e_h_vector, r_h_vector], axis=0)  # shape (2, 64)
         target_h_vector = torch.from_numpy(target_h_vector[:, :, None])  # shape (2, 64, 1)
 
         return torch.from_numpy(sample), target_xp, target_h_vector
@@ -77,19 +77,24 @@ class LoadDataAutoSteer(Dataset):
                 if os.path.isfile(b.join(filename.rsplit(a, 1)).rsplit('.', 1)[0] + '.txt'):
                     with open(b.join(filename.rsplit(a, 1)).rsplit('.', 1)[0] + '.txt') as f:
                         data = json.load(f)
-                        l_xp, r_xp = [], []
-                        l_h_vector, r_h_vector = [], []
+                        l_xp, e_xp, r_xp = [], [], []
+                        l_h_vector, e_h_vector, r_h_vector = [], [], []
                         for item in data:
                             if item['class'] == "left":
                                 l_xp = np.array(item['xp'], dtype=np.float32)
                                 l_h_vector = np.array(item.get('h_vector', []), dtype=np.float32)
+                            elif item['class'] == "ego":
+                                e_xp = np.array(item['xp'], dtype=np.float32)
+                                e_h_vector = np.array(item.get('h_vector', []), dtype=np.float32)
                             elif item['class'] == "right":
                                 r_xp = np.array(item['xp'], dtype=np.float32)
                                 r_h_vector = np.array(item.get('h_vector', []), dtype=np.float32)
                         label = {
                             "l_xp": l_xp,
+                            "e_xp": e_xp,
                             "r_xp": r_xp,
                             "l_h_vector": l_h_vector,
+                            "e_h_vector": e_h_vector,
                             "r_h_vector": r_h_vector
                         }
                 else:

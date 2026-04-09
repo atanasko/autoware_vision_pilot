@@ -289,7 +289,7 @@ if __name__ == "__main__":
     parser.add_argument('--local-rank', default=1, type=int)
     parser.add_argument('--version', default='n', type=str)
     # parser.add_argument('--epochs', default=30, type=int)
-    parser.add_argument('--runs_dir', default="runs_test", type=str)
+    parser.add_argument('--runs_dir', default="runs/autosteer", type=str)
     parser.add_argument('--epochs', default=30, type=int)
 
     args = parser.parse_args()
