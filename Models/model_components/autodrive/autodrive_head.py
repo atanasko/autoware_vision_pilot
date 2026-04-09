@@ -19,18 +19,18 @@ class AutoDriveHead(nn.Module):
 
     Shared trunk
     ------------
-    FC1  : Linear(2·p5_h·p5_w, 768) + ReLU  (p5_h, p5_w = spatial size of P5 maps)
-    FC2  : Linear(768,  512) + ReLU
+    FC1  : Linear(2·p5_h·p5_w, 768) + SiLU + Dropout(0.1)
+    FC2  : Linear(768, 512)          + SiLU + Dropout(0.1)
 
     Task branches
     -------------
-    distance_head  : Linear(512, 1) + Sigmoid
-                     → d ∈ (0, 1);  distance_m = 200 * (1 - d)
+    distance_head  : Linear(512, 1) + ReLU   → d_norm ≥ 0  (L1 vs d_norm_gt ∈ [0,1])
+                     d_norm = (150 - min(d,150)) / 150  → to_distance_meters = 150*(1-d_norm)
 
-    curvature_head : Linear(512, 1)  — raw regression (1/m)
+    curvature_head : Linear(512, 1) + Tanh   → ∈ (-1, 1)  (L1 vs curvature in 1/m)
 
-    flag_head      : Linear(512, 2)  — raw logits for CIPO presence
-                     (CrossEntropyLoss in training; argmax or softmax at inference)
+    flag_head      : Linear(512, 1)           → raw logit   (BCEWithLogitsLoss vs {0,1})
+                     No activation here — BCEWithLogitsLoss applies sigmoid internally.
     """
 
     def __init__(self, in_channels: int = 256, p5_h: int = 16, p5_w: int = 32):
@@ -63,10 +63,9 @@ class AutoDriveHead(nn.Module):
             nn.Linear(512, 1),
             nn.Tanh(),
         )
-        self.flag_head = nn.Sequential(
-            nn.Linear(512, 1),
-            nn.Sigmoid(),
-        )
+
+        # Raw logit — no sigmoid here; BCEWithLogitsLoss applies it numerically stably.
+        self.flag_head = nn.Linear(512, 1)
 
     def forward(self, feature_prev: torch.Tensor, feature_curr: torch.Tensor):
         x = torch.cat([feature_prev, feature_curr], dim=1)
@@ -81,13 +80,13 @@ class AutoDriveHead(nn.Module):
         x = self.fc1(x)
         x = self.fc2(x)
 
-        d_norm = self.distance_head(x)
-        curvature = self.curvature_head(x)
-        cipo_presence = self.flag_head(x)
+        d_norm      = self.distance_head(x)
+        curvature   = self.curvature_head(x)
+        flag_logits = self.flag_head(x)
 
-        return d_norm, curvature, cipo_presence
+        return d_norm, curvature, flag_logits
 
     @staticmethod
     def to_distance_meters(d_norm: torch.Tensor) -> torch.Tensor:
-        """Convert normalised sigmoid output → metres.  distance_m = 200 * (1 - d)."""
-        return 200.0 * (1.0 - d_norm)
+        """Convert normalised ReLU output → metres.  distance_m = 150 * (1 - d_norm)."""
+        return 150.0 * (1.0 - d_norm)

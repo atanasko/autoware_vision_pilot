@@ -294,3 +294,29 @@ class Augmentations():
             augmented_image = noised["image"]
         
         return augmented_image
+
+    # AUTODRIVE - Apply transform for temporal CIPO prediction (prev + curr frame pair)
+    # NO horizontal flip — curvature and distance are frame-direction-dependent.
+    # The same colour/noise parameters are applied to both frames so the temporal
+    # relationship is preserved.
+    def applyTransformAutoDrive(self, image_prev, image_curr):
+        # Resize to network input (1024 x 512)
+        resize = A.Compose([A.Resize(width=1024, height=512)])
+        image_prev = resize(image=image_prev)["image"]
+        image_curr = resize(image=image_curr)["image"]
+
+        if self.is_train and random.random() >= 0.25:
+            # Replay-based application ensures identical parameters for both frames
+            noise = A.ReplayCompose([
+                A.RandomBrightnessContrast(brightness_limit=0.3, contrast_limit=0.3, p=0.5),
+                A.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.05, p=0.4),
+                A.GaussNoise(noise_scale_factor=0.2, p=0.3),
+                A.ISONoise(color_shift=(0.05, 0.2), intensity=(0.1, 0.3), p=0.2),
+                A.ToGray(num_output_channels=3, method='weighted_average', p=0.05),
+            ])
+            result_prev = noise(image=image_prev)
+            image_prev  = result_prev["image"]
+            # Apply the exact same ops (same random state) to the current frame
+            image_curr  = A.ReplayCompose.replay(result_prev["replay"], image=image_curr)["image"]
+
+        return image_prev, image_curr
