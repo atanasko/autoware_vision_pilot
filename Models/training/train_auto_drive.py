@@ -1,44 +1,55 @@
 """
 Main training loop for AutoDrive (ZOD dataset).
 
-All outputs are written under {zod_root}/training/autodrive/:
-    checkpoints/AutoDrive_last.pth   — saved every epoch (full state, restorable)
+All outputs live under {zod_root}/training/autodrive/{run_name}/:
+    checkpoints/AutoDrive_last.pth   — saved every epoch (full state)
     checkpoints/AutoDrive_best.pth   — saved when val loss improves
     tensorboard/                     — TensorBoard event files
 
-Usage — fresh training:
-    python Models/training/train_auto_drive.py \\
-        --root ~/Downloads/data/zod
+─────────────────────────────────────────────────────────
+Usage — Phase 1: curvature head only (with pretrained backbone)
+─────────────────────────────────────────────────────────
+  python Models/training/train_auto_drive.py \\
+      --root ~/Downloads/data/zod \\
+      --autospeed-ckpt ~/Downloads/data/zod/models/autospeed.pt \\
+      --train-mode curvature \\
+      --epochs 20 \\
+      --batch-size 16 --workers 2
 
-Usage — resume after crash / keyboard interrupt:
-    python Models/training/train_auto_drive.py \\
-        --root ~/Downloads/data/zod \\
-        --resume  (auto-loads AutoDrive_last.pth from the training dir)
+─────────────────────────────────────────────────────────
+Usage — Phase 2: joint training of all heads (resume from Phase 1)
+─────────────────────────────────────────────────────────
+  python Models/training/train_auto_drive.py \\
+      --root ~/Downloads/data/zod \\
+      --autospeed-ckpt ~/Downloads/data/zod/models/autospeed.pt \\
+      --train-mode joint \\
+      --checkpoint <phase1_best.pth> \\
+      --epochs 50 \\
+      --batch-size 16 --workers 2
 
-    or point at any checkpoint explicitly:
-        --resume --checkpoint ~/Downloads/data/zod/training/autodrive/checkpoints/AutoDrive_epoch5.pth
-
-Optional:
-    [--epochs 50] [--batch-size 16] [--workers 2]
+─────────────────────────────────────────────────────────
+Resume after crash
+─────────────────────────────────────────────────────────
+  Add --resume  (auto-loads AutoDrive_last.pth from the run dir)
+  or  --checkpoint <explicit path>
 
 TensorBoard:
-    tensorboard --logdir ~/Downloads/data/zod/training/autodrive/tensorboard/
+  tensorboard --logdir ~/Downloads/data/zod/training/autodrive/<run_name>/tensorboard/
 
-    Scalars
-    -------
-    Loss/train_total          — raw per-step loss       (noisy, every 200 steps)
-    Loss/train_avg_total      — epoch-averaged loss      (smooth, once per epoch)
-    Loss/train_avg_distance   — epoch-averaged dist L1
-    Loss/train_avg_curvature  — epoch-averaged curv L1
-    Loss/train_avg_flag       — epoch-averaged flag BCE
-    Loss/val_*                — validation breakdown
-    Metrics/flag_acc_%        — CIPO flag accuracy 0–100
-    Metrics/dist_mae_m        — distance MAE in real metres
-    Metrics/lr                — learning rate
-    Visualization/sample      — annotated frame every 1000 steps
+Scalars
+-------
+  Loss/train_avg_*         epoch-averaged train losses (smooth)
+  Loss/train_*             per-step losses (noisy, every --log-every steps)
+  Loss/val_*               validation losses
+  Metrics/flag_acc_%       CIPO flag accuracy
+  Metrics/dist_mae_m       distance MAE in metres
+  Metrics/grad_norm        gradient norm (for diagnosing exploding gradients)
+  Hist/flag_logits         flag logit distribution (per --log-every steps)
+  Hist/d_pred_*            distance pred distribution
+  Hist/curv_pred           curvature pred distribution
+  Visualization/sample     annotated image (per --vis-every steps)
 """
 
-import os
 import sys
 from argparse import ArgumentParser
 from pathlib import Path
@@ -49,7 +60,11 @@ from torch.utils.data import DataLoader
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from Models.data_utils.load_data_auto_drive import LoadDataAutoDrive
-from Models.training.auto_drive_trainer import AutoDriveTrainer
+from Models.training.auto_drive_trainer import (
+    AutoDriveTrainer,
+    TRAIN_MODE_CURVATURE,
+    TRAIN_MODE_JOINT,
+)
 
 
 def _collate(batch: list[dict]) -> dict:
@@ -57,7 +72,7 @@ def _collate(batch: list[dict]) -> dict:
 
 
 def _run_val(trainer: AutoDriveTrainer, loader: DataLoader):
-    """Returns averaged (total, dist, curv, flag, flag_acc_pct, dist_mae_m)."""
+    """Average validation metrics across all batches."""
     total = dist = curv = flag = acc = mae = 0.0
     n = 0
     for batch in loader:
@@ -71,36 +86,60 @@ def _run_val(trainer: AutoDriveTrainer, loader: DataLoader):
 
 def main():
     parser = ArgumentParser()
-    parser.add_argument("--root",       required=True,
-                        help="ZOD dataset root — all outputs go under {root}/training/autodrive/")
-    parser.add_argument("--resume",     action="store_true",
-                        help="Resume from AutoDrive_last.pth in the training dir")
-    parser.add_argument("--checkpoint", default="",
-                        help="Explicit checkpoint path to resume from (implies --resume)")
-    parser.add_argument("--epochs",     type=int, default=50)
-    parser.add_argument("--batch-size", type=int, default=16)
-    parser.add_argument("--workers",    type=int, default=2)
+    parser.add_argument("--root",         required=True,
+                        help="ZOD dataset root — outputs go under {root}/training/autodrive/<run-name>/")
+    parser.add_argument("--run-name",     default="",
+                        help="Sub-folder name for this run (default: auto-numbered run001, run002, …)")
+    parser.add_argument("--train-mode",   default=TRAIN_MODE_JOINT,
+                        choices=[TRAIN_MODE_CURVATURE, TRAIN_MODE_JOINT],
+                        help="'curvature' — train curvature head only (backbone frozen); "
+                             "'joint' — train all heads end-to-end")
+    parser.add_argument("--autospeed-ckpt", default="",
+                        help="Path to autospeed.pt — initialises backbone from pretrained weights")
+    parser.add_argument("--resume",       action="store_true",
+                        help="Resume from AutoDrive_last.pth in the run dir")
+    parser.add_argument("--checkpoint",   default="",
+                        help="Explicit checkpoint path (overrides --resume)")
+    parser.add_argument("--epochs",       type=int, default=50)
+    parser.add_argument("--batch-size",   type=int, default=16)
+    parser.add_argument("--workers",      type=int, default=2)
+    parser.add_argument("--log-every",    type=int, default=100,
+                        help="Log per-step scalars + histograms every N steps")
+    parser.add_argument("--vis-every",    type=int, default=500,
+                        help="Save visualization image to TensorBoard every N steps")
     args = parser.parse_args()
 
     # ------------------------------------------------------------------
-    # Output directories — everything under zod_root/training/autodrive/
+    # Output directories
     # ------------------------------------------------------------------
-    train_root  = Path(args.root) / "training" / "autodrive"
-    ckpt_dir    = train_root / "checkpoints"
-    tb_dir      = train_root / "tensorboard"
+    base_dir = Path(args.root) / "training" / "autodrive"
 
+    if args.run_name:
+        run_name = args.run_name
+    else:
+        # Auto-number: run001, run002, …
+        existing = sorted(base_dir.glob("run[0-9][0-9][0-9]"))
+        run_name = f"run{len(existing) + 1:03d}"
+
+    run_dir  = base_dir / run_name
+    ckpt_dir = run_dir / "checkpoints"
+    tb_dir   = run_dir / "tensorboard"
     ckpt_dir.mkdir(parents=True, exist_ok=True)
     tb_dir.mkdir(parents=True, exist_ok=True)
 
     ckpt_last = str(ckpt_dir / "AutoDrive_last.pth")
     ckpt_best = str(ckpt_dir / "AutoDrive_best.pth")
 
+    print(f"Run         : {run_dir}")
+    print(f"Mode        : {args.train_mode}")
     print(f"Checkpoints : {ckpt_dir}")
     print(f"TensorBoard : {tb_dir}")
     print(f"  tensorboard --logdir {tb_dir}")
+    if args.autospeed_ckpt:
+        print(f"AutoSpeed   : {args.autospeed_ckpt}")
 
     # ------------------------------------------------------------------
-    # Dataset + DataLoader
+    # Dataset + DataLoaders
     # ------------------------------------------------------------------
     data = LoadDataAutoDrive(args.root)
 
@@ -119,56 +158,77 @@ def main():
 
     steps_per_epoch = len(train_loader)
     print(f"Train: {len(data.train):,}  Val: {len(data.val):,}  Test: {len(data.test):,} pairs")
-    print(f"Steps per epoch: {steps_per_epoch:,}")
+    print(f"Steps per epoch : {steps_per_epoch:,}")
 
     # ------------------------------------------------------------------
     # Trainer
     # ------------------------------------------------------------------
-    trainer = AutoDriveTrainer(tensorboard_dir=str(tb_dir))
+    trainer = AutoDriveTrainer(
+        tensorboard_dir=str(tb_dir),
+        train_mode=args.train_mode,
+        autospeed_ckpt=args.autospeed_ckpt,
+    )
+    trainer._apply_train_mode()
     trainer.zero_grad()
 
     # Resume state
     start_epoch   = 0
     global_step   = 0
-    best_val_loss = float('inf')
+    best_val_loss = float("inf")
 
-    # Determine checkpoint to load
     resume_path = ""
     if args.checkpoint:
         if Path(args.checkpoint).exists():
             resume_path = args.checkpoint
         else:
-            print(f"  WARNING: --checkpoint path not found: {args.checkpoint}")
-            print("  Starting fresh (no checkpoint loaded).")
+            print(f"  WARNING: --checkpoint not found: {args.checkpoint}")
     elif args.resume:
         if Path(ckpt_last).exists():
             resume_path = ckpt_last
         else:
-            print("  --resume: no AutoDrive_last.pth found yet, starting fresh.")
+            print("  --resume: no AutoDrive_last.pth found, starting fresh.")
 
     if resume_path:
         start_epoch, global_step, best_val_loss = trainer.load_checkpoint(resume_path)
+
+    # ------------------------------------------------------------------
+    # LR schedule helper
+    # ------------------------------------------------------------------
+    def _get_lr(epoch: int, mode: str) -> float:
+        """
+        Curvature mode (head-only):
+            epochs 0-9  : 3e-4
+            epochs 10+  : 3e-5
+        Joint mode (E2E):
+            epochs 0-14 : 1e-4
+            epochs 15-34: 3e-5
+            epochs 35+  : 1e-5
+        """
+        if mode == TRAIN_MODE_CURVATURE:
+            return 3e-4 if epoch < 10 else 3e-5
+        else:
+            if epoch < 15:  return 1e-4
+            if epoch < 35:  return 3e-5
+            return 1e-5
 
     # ------------------------------------------------------------------
     # Training loop
     # ------------------------------------------------------------------
     for epoch in range(start_epoch, args.epochs):
         print(f"\n{'='*60}")
-        print(f"Epoch {epoch + 1}/{args.epochs}  (global step starts at {global_step})")
+        print(f"Epoch {epoch+1}/{args.epochs}  "
+              f"(mode={args.train_mode}, global_step={global_step})")
 
-        # LR schedule
-        if epoch < 5:
-            trainer.set_learning_rate(1e-3)
-        elif epoch < 20:
-            trainer.set_learning_rate(1e-4)
-        else:
-            trainer.set_learning_rate(1e-5)
+        lr = _get_lr(epoch, args.train_mode)
+        trainer.set_learning_rate(lr)
 
         trainer.set_train_mode()
         trainer.reset_averages()
 
-        p_bar = tqdm.tqdm(train_loader, total=steps_per_epoch,
-                          desc=f"Epoch {epoch+1}/{args.epochs}")
+        p_bar = tqdm.tqdm(
+            train_loader, total=steps_per_epoch,
+            desc=f"Epoch {epoch+1}/{args.epochs}",
+        )
 
         for batch in p_bar:
             trainer.set_batch(batch)
@@ -179,27 +239,25 @@ def main():
             global_step += 1
 
             p_bar.set_description(
-                f"Epoch {epoch+1}/{args.epochs}  "
+                f"[{epoch+1}/{args.epochs}]  "
                 f"loss {trainer.avg_total.avg:.4f}  "
-                f"d {trainer.avg_distance.avg:.4f}  "
                 f"c {trainer.avg_curvature.avg:.4f}  "
-                f"f {trainer.avg_flag.avg:.4f}"
+                f"d {trainer.avg_distance.avg:.4f}  "
+                f"f {trainer.avg_flag.avg:.4f}  "
+                f"|g| {trainer._grad_norm:.2f}"
             )
 
-            if global_step % 200 == 0:
+            if global_step % args.log_every == 0:
                 trainer.log_train_step(global_step)
+                trainer.log_histograms(global_step)
 
-            if global_step % 1000 == 0:
+            if global_step % args.vis_every == 0:
                 trainer.save_visualization(global_step)
 
         trainer.log_train_epoch(epoch + 1)
 
-        # ------------------------------------------------------------------
-        # Save last checkpoint (full state — always safe to resume from)
-        # ------------------------------------------------------------------
+        # Save checkpoint every epoch
         trainer.save_checkpoint(ckpt_last, epoch + 1, global_step, best_val_loss)
-
-        # Also save a named copy so you can roll back to a specific epoch
         ckpt_epoch = str(ckpt_dir / f"AutoDrive_epoch{epoch+1:03d}.pth")
         trainer.save_checkpoint(ckpt_epoch, epoch + 1, global_step, best_val_loss)
 
@@ -212,10 +270,9 @@ def main():
             v_total, v_dist, v_curv, v_flag, v_acc, v_mae = _run_val(trainer, val_loader)
 
         trainer.log_val_epoch(v_total, v_dist, v_curv, v_flag, v_acc, v_mae, epoch + 1)
-
         print(
             f"  [Val] loss {v_total:.4f}  "
-            f"d {v_dist:.4f}  c {v_curv:.4f}  f {v_flag:.4f}  "
+            f"c {v_curv:.4f}  d {v_dist:.4f}  f {v_flag:.4f}  "
             f"flag_acc {v_acc:.1f}%  dist_mae {v_mae:.1f} m"
         )
 
@@ -236,7 +293,7 @@ def main():
     trainer.log_test(t_total, t_dist, t_curv, t_flag, t_acc, t_mae)
     print(
         f"[Test] loss {t_total:.4f}  "
-        f"d {t_dist:.4f}  c {t_curv:.4f}  f {t_flag:.4f}  "
+        f"c {t_curv:.4f}  d {t_dist:.4f}  f {t_flag:.4f}  "
         f"flag_acc {t_acc:.1f}%  dist_mae {t_mae:.1f} m"
     )
 
