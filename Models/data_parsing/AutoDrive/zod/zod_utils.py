@@ -34,3 +34,16 @@ def iter_all_sequences():
     """Yield sequence IDs 000000 through 001472."""
     for i in range(1473):
         yield f"{i:06d}"
+
+
+def sequence_output_dir(zod_root: Path, seq: str) -> Path:
+    """
+    Per-sequence pipeline outputs live under the dataset root:
+    {zod_root}/output/{seq}/  (cipo_radar.json, debug/images/, model_input_sample.png, …)
+    """
+    return Path(zod_root) / "output" / seq
+
+
+def default_autospeed_checkpoint(zod_root: Path) -> Path:
+    """AutoSpeed weights next to the dataset: {zod_root}/models/autospeed.pt"""
+    return Path(zod_root) / "models" / "autospeed.pt"

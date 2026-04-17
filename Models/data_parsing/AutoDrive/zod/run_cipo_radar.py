@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Run AutoSpeed on ZOD images, compute CIPO azimuth in camera frame,
-transform to radar frame, associate with nearest radar cluster.
+Run AutoSpeed (letterboxed inference, auto_speed_infer.AutoSpeedNetworkInfer) on ZOD images,
+compute CIPO azimuth in camera frame, transform to radar frame, associate with nearest radar cluster.
 Output: distance (m), speed (m/s) per image.
 """
 
@@ -18,25 +18,15 @@ sys.path.insert(0, str(_REPO_ROOT))
 from PIL import Image
 
 try:
-    from Models.inference.auto_speed_infer_50deg import (
-        AutoSpeed50Infer,
-        center_crop_50deg_resize,
-        pixel_to_h_angle_deg_50,
-    )
+    from Models.inference.auto_speed_infer import AutoSpeedNetworkInfer
 except ImportError:
-    from inference.auto_speed_infer_50deg import (
-        AutoSpeed50Infer,
-        center_crop_50deg_resize,
-        pixel_to_h_angle_deg_50,
-    )
+    from inference.auto_speed_infer import AutoSpeedNetworkInfer
 
 try:
     from sklearn.cluster import DBSCAN
 except ImportError:
     DBSCAN = None
 
-
-MODEL_PATH = Path(__file__).resolve().parents[4] / "VisionPilot/ROS2/data/models/autodrive.pt"
 
 _LAT_BUFFER_M = 0.5        # ±0.5m lateral buffer for CIPO-radar (Scenario 1) azimuth association
 _LAT_BUFFER_RELAXED_M = 1.0  # fallback cone for CIPO when strict cone finds no cluster
@@ -45,13 +35,24 @@ _MIN_ABS_SPEED_WORLD_MS = 0.5   # Scenario 3: |range_rate + ego_speed| > 0.5 →
 _MIN_ABS_RANGE_RATE_FALLBACK = 0.5  # fallback when ego_speed not available
 _MAX_RANGE_M = 200.0        # maximum radar search range (m) - radar useful up to ~200m
 
+# Temporal association: search up to N frames forward/back.
+# - Pass 1 (CIPO, cluster miss): track_from_prev only looks *backward* in `results` (online; future frames not built yet).
+# - Pass 2 (CIPO bbox, no range): lookahead + lookbehind N for same-object D/V extrapolation.
+# - Pass 3 (no CIPO camera): lookahead + lookbehind N for path-radar neighbor fill (moving target).
+TEMPORAL_NEIGHBOR_FRAMES = 10
+
 # Volvo XC90 (ZOD vehicle) steering geometry - same as step1_timestamp_association.py
 _STEERING_COLUMN_RATIO = 16.8  # steering wheel deg / tyre deg
 
 _ZOD_SCRIPT_DIR = Path(__file__).resolve().parent
 if str(_ZOD_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_ZOD_SCRIPT_DIR))
-from zod_utils import get_images_blur_dir, get_calibration_path
+from zod_utils import (
+    default_autospeed_checkpoint,
+    get_images_blur_dir,
+    get_calibration_path,
+    sequence_output_dir,
+)
 
 
 def parse_image_timestamp(fname: Path) -> int:
@@ -81,6 +82,54 @@ def pixel_to_h_angle_deg(u: float, W: float, H: float, hfov_deg: float) -> float
     H_angle = ((u - W/2) / (W/2)) * (HFOV/2)
     """
     return ((u - W / 2) / (W / 2)) * (hfov_deg / 2)
+
+
+_MODEL_W, _MODEL_H = 1024, 512  # AutoSpeedNetworkInfer train size
+
+
+def center_crop_50deg_resize(img: "Image.Image", W: int, H: int, hfov_deg: float, target_fov: float = 50.0):
+    """50° HFOV crop: width = img_w*target_fov/hfov_deg, height = width/2 (2:1), centered; resize to 1024×512."""
+    img_w, img_h = img.size  # use actual image dims, not calibration (may differ)
+    orig_crop_w = int(round(img_w * target_fov / hfov_deg))   # ≈ 1603 for ZOD
+    orig_crop_h = orig_crop_w // 2                             # 2:1 → ≈ 801
+    crop_x = (img_w - orig_crop_w) // 2
+    crop_y = (img_h - orig_crop_h) // 2                       # center vertically
+    cropped = img.crop((crop_x, crop_y, crop_x + orig_crop_w, crop_y + orig_crop_h))
+    model_img = cropped.resize((_MODEL_W, _MODEL_H), Image.BILINEAR)
+    crop_info = {
+        "crop_x": crop_x,
+        "crop_y": crop_y,
+        "orig_crop_w": orig_crop_w,
+        "orig_crop_h": orig_crop_h,
+        "model_w": _MODEL_W,
+        "model_h": _MODEL_H,
+        "fov_deg": target_fov,
+    }
+    return model_img, crop_info
+
+
+def pixel_to_h_angle_deg_50(u: float, crop_info: dict) -> float:
+    """
+    Same convention as reference `pixel_to_h_angle_deg_50`: angle from optical axis in the 50° window.
+    Here `u IS THE HORIZONTAL CENTER OF THE BBOX` in **model input pixels** (0..model_w, usually 1024x512).
+    Map to full-frame horizontal position in that window, then linear angle in the 50° span.
+    """
+    u_full = crop_info["crop_x"] + (u / crop_info["model_w"]) * crop_info["orig_crop_w"]
+    cw = crop_info["orig_crop_w"]
+    fov = crop_info["fov_deg"]
+    return ((u_full - crop_info["crop_x"] - cw / 2) / (cw / 2)) * (fov / 2)
+
+
+def bbox_crop_to_full(x1, y1, x2, y2, crop_info):
+    """
+    Map bbox corners from model space (1024×512) back to full-image coordinates.
+    x: scale by (orig_crop_w / model_w) + crop_x offset.
+    y: scale by (orig_crop_h / model_h) + crop_y offset.
+    """
+    sx = crop_info["orig_crop_w"] / crop_info["model_w"]
+    sy = crop_info["orig_crop_h"] / crop_info["model_h"]
+    cx, cy = crop_info["crop_x"], crop_info["crop_y"]
+    return float(x1) * sx + cx, float(y1) * sy + cy, float(x2) * sx + cx, float(y2) * sy + cy
 
 
 def cam_dir_to_radar_azimuth(h_angle_deg: float, cam_ext: np.ndarray, radar_ext: np.ndarray) -> float:
@@ -129,8 +178,10 @@ def get_radar_clusters(radar_data, ts_ns: int, z_min=-0.5, z_max=1.0, range_scal
     az = pts_f["azimuth_angle"].astype(np.float64)
     rr = pts_f["range_rate"].astype(np.float64)
     polar_vel = np.column_stack([rg, az, rr])
-    if len(polar_vel) == 0 or DBSCAN is None:
+    if len(polar_vel) == 0:
         return []
+    if DBSCAN is None:
+        raise RuntimeError("DBSCAN unavailable (scikit-learn not installed). Install `scikit-learn`.")
     metric = lambda a, b: _polar_vel_dist(a, b, range_scale, lat_buffer, vel_scale)
     labels = DBSCAN(eps=1.0, min_samples=min_samples, metric=metric).fit(polar_vel).labels_
     clusters = []
@@ -360,12 +411,21 @@ def _pixel_point_from_bbox(bbox):
     return [round(float(u), 1), round(float(v), 1)]
 
 
-def find_cipo_via_bbox(preds, curvature_inv_m, clusters, cam_ext, radar_ext, crop_info,
-                        lat_buffer_m=0.5, path_buffer_m=1.0):
+def find_cipo_via_bbox(
+    preds,
+    curvature_inv_m,
+    clusters,
+    cam_ext,
+    radar_ext,
+    crop_info: dict,
+    lat_buffer_m=0.5,
+    path_buffer_m=1.0,
+):
     """
     Scenario 2: no L1/L2 CIPO detected but other bounding boxes exist.
     For each bbox sorted by bottom-y (closest first), project to radar azimuth,
     find nearest radar cluster, verify it lies on the curvature path.
+    Bbox coords are in 50°-crop space (inference output). crop_info used for angle mapping.
     Returns (cluster, az_radar_rad) for the first on-path bbox match, or (None, None).
     """
     if not preds or not clusters:
@@ -392,11 +452,22 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--sequence", type=str, default="000479")
     parser.add_argument("--zod-root", type=str, default=None, required=True, help="ZOD dataset root (contains images_blur_* folders, radar_front/, infos/, vehicle_data/, etc.)")
-    parser.add_argument("--output", type=str, default=None, help="Output path for cipo_radar.json (default: cipo_radar_{seq}.json)")
-    parser.add_argument("--model-path", type=str, default=str(MODEL_PATH), help="Path to AutoSpeed model (autodrive.pt)")
+    parser.add_argument(
+        "--output",
+        type=str,
+        default=None,
+        help="Output path for cipo_radar.json (default: {zod_root}/output/{seq}/cipo_radar.json)",
+    )
+    parser.add_argument(
+        "--model-path",
+        type=str,
+        default=None,
+        help="Path to AutoSpeed weights (default: {zod_root}/models/autospeed.pt)",
+    )
     args = parser.parse_args()
     seq = args.sequence
     zod = Path(args.zod_root)
+    model_path = Path(args.model_path) if args.model_path else default_autospeed_checkpoint(zod)
     img_dir = get_images_blur_dir(zod, seq)
     calib_path = get_calibration_path(zod, seq)
     radar_dir = zod / "radar_front" / "sequences" / seq / "radar_front"
@@ -424,9 +495,9 @@ def main():
     radar_ext = np.array(calib["radar_extrinsics"])
 
     radar_data = np.load(assoc["radar_npy_path"], allow_pickle=True)
-    model = AutoSpeed50Infer(str(args.model_path))
+    model = AutoSpeedNetworkInfer(str(model_path))
 
-    out_path = Path(args.output) if args.output else Path(__file__).parent / f"cipo_radar_{seq}.json"
+    out_path = Path(args.output) if args.output else sequence_output_dir(zod, seq) / "cipo_radar.json"
     out_path.parent.mkdir(parents=True, exist_ok=True)
     sample_saved = False
 
@@ -446,12 +517,14 @@ def main():
             continue
 
         img = Image.open(img_path).convert("RGB")
+        # Center-crop to 50° horizontal FOV then run AutoSpeedNetworkInfer (letterboxes to 1024×512 internally)
         crop_img, crop_info = center_crop_50deg_resize(img, W, H, hfov_deg)
-        sample_path = str(out_path.parent / "model_input_sample.png") if not sample_saved else None
-        if sample_path:
+        if not sample_saved:
             sample_saved = True
-            print(f"Saved model input sample -> {sample_path}")
-        preds = model.inference(crop_img, crop_info, W, H, save_sample_path=sample_path)
+            sample_path = str(out_path.parent / "model_input_sample.png")
+            crop_img.save(sample_path)  # already 1024×512 — direct save
+            print(f"Saved model input sample (50°-crop direct-resized 1024x512) -> {sample_path}")
+        preds = model.inference(crop_img)
         if (idx + 1) % 20 == 0 or idx == 0:
             print(f"  CIPO-radar: {idx + 1}/{n_assoc} images", flush=True)
 
@@ -496,7 +569,7 @@ def main():
                 viz = _viz_fields_from_cluster(cluster)
                 results.append({
                     "image": rec["image"],
-                    "cipo_detected": False,
+                    "cipo_detected": True,
                     "cipo_from_path": True,
                     "cipo_scenario": cipo_scenario,
                     "azimuth_radar_deg": az_result_deg,
@@ -518,11 +591,15 @@ def main():
 
         cipo.sort(key=lambda p: (p[1] + p[3]) / 2, reverse=True)
         x1, y1, x2, y2, conf, cls = cipo[0]
-        u = (x1 + x2) / 2
+        u = (x1 + x2) / 2  # pixel x in 50°-crop space
 
+        # Angle from 50°-crop optical axis → radar azimuth
         h_angle_deg = pixel_to_h_angle_deg_50(u, crop_info)
         az_radar = cam_dir_to_radar_azimuth(h_angle_deg, cam_ext, radar_ext)
         az_radar_deg = float(np.rad2deg(az_radar))
+
+        # Map crop-space bbox back to full-image coordinates for storage
+        fx1, fy1, fx2, fy2 = bbox_crop_to_full(x1, y1, x2, y2, crop_info)
 
         # CIPO: tighter vel_scale so points with similar range_rate cluster together
         clusters = get_radar_clusters(radar_data, rec["radar_timestamp_ns"], lat_buffer=_LAT_BUFFER_M, vel_scale=1.0)
@@ -535,12 +612,11 @@ def main():
         track_from_prev = False
 
         if cluster is None:
-            # 1. First: Track from previous frames (temporal continuity)
-            TRACK_LOOKBEHIND = 10
+            # 1. Track from previous frames only (same pass; future frames not in `results` yet).
             AZ_TOL_DEG = 4.0
             MAX_GAP_S = 1.0
             best_D, best_V, best_gap = None, None, float("inf")
-            for k in range(1, min(TRACK_LOOKBEHIND + 1, len(results) + 1)):
+            for k in range(1, min(TEMPORAL_NEIGHBOR_FRAMES + 1, len(results) + 1)):
                 rj = results[-k]
                 if rj.get("distance_m") is None:
                     continue
@@ -577,10 +653,11 @@ def main():
         if cluster is not None:
             D, V = cluster["range"], cluster["range_rate"]
             viz = _viz_fields_from_cluster(cluster, azimuth_rad_deg=az_radar_deg if cluster.get("azimuth") is None else None)
-            bbox = [float(x1), float(y1), float(x2), float(y2)]
+            bbox = [fx1, fy1, fx2, fy2]
             out = {
                 "image": rec["image"],
                 "cipo_detected": True,
+                "cipo_scenario": 1,
                 "bbox": bbox,
                 "azimuth_radar_deg": az_radar_deg,
                 "distance_m": round(D, 2),
@@ -598,10 +675,10 @@ def main():
                 out["relaxed_cone_used"] = True
             results.append(out)
         else:
-            bbox = [float(x1), float(y1), float(x2), float(y2)]
+            bbox = [fx1, fy1, fx2, fy2]
             results.append({
                 "image": rec["image"],
-                "cipo_detected": True,
+                "cipo_detected": False,
                 "bbox": bbox,
                 "azimuth_radar_deg": az_radar_deg,
                 "distance_m": None,
@@ -613,9 +690,9 @@ def main():
             })
 
     print(f"  Pass 1 done: {len(results)} frames. Running backfill...", flush=True)
-    # Pass 2: backfill - look ahead AND behind for cluster, estimate if same object
-    LOOKAHEAD = 10
-    LOOKBEHIND = 10
+    # Pass 2: CIPO frames with bbox but no radar match — look ahead AND behind TEMPORAL_NEIGHBOR_FRAMES
+    LOOKAHEAD = TEMPORAL_NEIGHBOR_FRAMES
+    LOOKBEHIND = TEMPORAL_NEIGHBOR_FRAMES
     AZ_TOL_DEG = 4.0  # same object: azimuth within 4 deg
     MAX_GAP_S = 1.0   # max time gap (seconds)
 
@@ -629,23 +706,24 @@ def main():
             continue
 
         best_D, best_V, best_gap = None, None, float("inf")
+        best_scenario = None
 
         def check_match(rj, ts_j, az_j, dt_s, D_ref, V_ref, is_forward):
             """is_forward: ref is from past -> D_est = D_ref + V_ref*dt"""
             if ts_j is None or D_ref is None or V_ref is None:
-                return None, None
+                return None, None, None
             if dt_s <= 0 or dt_s > MAX_GAP_S:
-                return None, None
+                return None, None, None
             daz = abs(np.angle(np.exp(1j * np.deg2rad(az_i - az_j))))
             if np.rad2deg(daz) > AZ_TOL_DEG:
-                return None, None
+                return None, None, None
             if is_forward:
                 D_est = D_ref + V_ref * dt_s
             else:
                 D_est = D_ref - V_ref * dt_s
             if D_est <= 0:
-                return None, None
-            return D_est, V_ref
+                return None, None, None
+            return D_est, V_ref, rj.get("cipo_scenario")
 
         # Look ahead (future frames): D(t) = D_future - V*dt
         for k in range(1, LOOKAHEAD + 1):
@@ -658,11 +736,12 @@ def main():
             ts_j = rj.get("image_timestamp_ns")
             az_j = rj.get("azimuth_radar_deg")
             dt_s = (ts_j - ts_i) / 1e9
-            D_est, V_est = check_match(rj, ts_j, az_j, dt_s, rj["distance_m"], rj["speed_ms"], is_forward=False)
+            D_est, V_est, scenario_est = check_match(rj, ts_j, az_j, dt_s, rj["distance_m"], rj["speed_ms"], is_forward=False)
             if D_est is not None and k < best_gap:
                 best_gap = k
                 best_D = D_est
                 best_V = V_est
+                best_scenario = scenario_est
 
         # Look behind (past frames): D(t) = D_past + V*dt
         for k in range(1, LOOKBEHIND + 1):
@@ -675,11 +754,12 @@ def main():
             ts_j = rj.get("image_timestamp_ns")
             az_j = rj.get("azimuth_radar_deg")
             dt_s = (ts_i - ts_j) / 1e9
-            D_est, V_est = check_match(rj, ts_j, az_j, dt_s, rj["distance_m"], rj["speed_ms"], is_forward=True)
+            D_est, V_est, scenario_est = check_match(rj, ts_j, az_j, dt_s, rj["distance_m"], rj["speed_ms"], is_forward=True)
             if D_est is not None and k < best_gap:
                 best_gap = k
                 best_D = D_est
                 best_V = V_est
+                best_scenario = scenario_est
 
         if best_D is not None:
             r["distance_m"] = round(best_D, 2)
@@ -687,10 +767,13 @@ def main():
             viz = _viz_fields_from_cluster({"range": best_D, "range_rate": best_V}, azimuth_rad_deg=az_i)
             r["bev_xy"] = viz.get("bev_xy")
             r["speed_ms_adjusted"] = viz.get("speed_ms_adjusted")
+            r["cipo_detected"] = True
+            if best_scenario is not None:
+                r["cipo_scenario"] = best_scenario
 
-    # Pass 3: no-CIPO temporal fill - forward+backward, search by (D,V), iterative
-    NO_CIPO_LOOKAHEAD = 10
-    NO_CIPO_LOOKBEHIND = 10
+    # Pass 3: no-CIPO — path/radar association via neighbors ±TEMPORAL_NEIGHBOR_FRAMES (iterative)
+    NO_CIPO_LOOKAHEAD = TEMPORAL_NEIGHBOR_FRAMES
+    NO_CIPO_LOOKBEHIND = TEMPORAL_NEIGHBOR_FRAMES
     NO_CIPO_MAX_GAP_S = 1.0
     NO_CIPO_RANGE_TOL_M = 3.0
     NO_CIPO_VEL_TOL_MS = 2.0
@@ -767,10 +850,19 @@ def main():
                 r["speed_ms_adjusted"] = viz.get("speed_ms_adjusted")
                 r["cipo_from_path"] = True
                 r["track_from_neighbor"] = True
+                r["cipo_detected"] = True
+                r["cipo_scenario"] = 3
                 n_filled += 1
 
         if n_filled > 0:
             print(f"  No-CIPO temporal fill iter {iter_count}: filled {n_filled} frames", flush=True)
+
+    # Union output: add label-style aliases into the final cipo_radar.json.
+    # This lets you use `cipo_radar.json` directly for annotations without needing the labels/ folder.
+    for r in results:
+        r.setdefault("curvature", r.get("curvature_inv_m"))
+        r.setdefault("distance_to_in_path_object", r.get("distance_m"))
+        r.setdefault("speed_of_in_path_object", r.get("speed_ms"))
 
     with open(out_path, "w") as f:
         json.dump({"sequence": seq, "results": results}, f, indent=2)
