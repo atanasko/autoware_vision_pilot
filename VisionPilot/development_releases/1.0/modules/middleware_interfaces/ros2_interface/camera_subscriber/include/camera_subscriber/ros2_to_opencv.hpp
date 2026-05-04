@@ -109,6 +109,6 @@ namespace camera_subscriber {
 
     };
 
-};
+};  // namespace camera_subscriber
 
 #endif //VISIONPILOT_ROS2_TO_OPENCV_HPP
