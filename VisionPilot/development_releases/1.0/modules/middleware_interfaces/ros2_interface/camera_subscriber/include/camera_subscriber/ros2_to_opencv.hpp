@@ -1,6 +1,8 @@
 #ifndef VISIONPILOT_ROS2_TO_OPENCV_HPP
 #define VISIONPILOT_ROS2_TO_OPENCV_HPP
 
+#include <rclcpp/rclcpp.hpp>
+
 namespace camera_subscriber {
 
     /**
@@ -15,6 +17,8 @@ namespace camera_subscriber {
     * - Supports various image encodings (RGB, BGR, grayscale, etc.)
     */
 
-}
+    
+
+};
 
 #endif //VISIONPILOT_ROS2_TO_OPENCV_HPP
