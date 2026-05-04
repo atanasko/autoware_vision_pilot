@@ -162,6 +162,10 @@ namespace camera_subscriber {
             };
             std::queue<FrameMetadata> metadata_queue_;
 
+            // Statistics tracking
+            mutable std::mutex stats_mutex_;
+            SubscriptionStats stats_;
+
     };
 
 };  // namespace camera_subscriber
