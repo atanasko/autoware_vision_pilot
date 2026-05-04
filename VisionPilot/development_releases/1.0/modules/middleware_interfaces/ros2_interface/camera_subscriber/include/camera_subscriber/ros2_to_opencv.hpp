@@ -92,6 +92,9 @@ namespace camera_subscriber {
                 const sensor_msgs::msg::Image::SharedPtr &msg
             );
 
+            // ROS2 subscription
+            rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr image_subscription_;
+
     };
 
 };
