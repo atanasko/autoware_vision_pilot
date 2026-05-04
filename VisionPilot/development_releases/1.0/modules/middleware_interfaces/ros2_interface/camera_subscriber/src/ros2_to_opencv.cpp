@@ -178,4 +178,37 @@ namespace camera_subscriber {
 
     };
 
+
+    // Bunch of frame queue handlings
+
+    bool ROS2ImageSubscriber::has_frames() const {
+        std::lock_guard<std::mutex> lock(frame_mutex_);
+        return !frame_queue_.empty();
+    };
+
+    size_t ROS2ImageSubscriber::get_queue_size() const {
+        std::lock_guard<std::mutex> lock(frame_mutex_);
+        return frame_queue_.size();
+    };
+
+    size_t ROS2ImageSubscriber::get_max_queue_size() const {
+        return max_queue_size_;
+    };
+
+    void ROS2ImageSubscriber::clear_frame_buffer() {
+
+        std::lock_guard<std::mutex> lock(frame_mutex_);
+
+        while (!frame_queue_.empty()) {
+            frame_queue_.pop();
+        }
+
+        while (!metadata_queue_.empty()) {
+            metadata_queue_.pop();
+        }
+
+        RCLCPP_INFO(get_logger(), "Frame buffer cleared");
+
+    };
+
 }; // namespace camera_subscriber
