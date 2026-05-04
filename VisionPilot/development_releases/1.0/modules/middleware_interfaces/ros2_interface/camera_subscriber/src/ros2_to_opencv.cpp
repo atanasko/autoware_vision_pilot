@@ -151,4 +151,31 @@ namespace camera_subscriber {
 
     };
 
+
+    cv::Mat ROS2ImageSubscriber::get_latest_frame_with_timestamp(
+        uint32_t &frame_index,
+        double &timestamp_sec
+    ) {
+
+        std::lock_guard<std::mutex> lock(frame_mutex_);
+
+        // Return empty Mat if no frames available
+        if (frame_queue_.empty()) {
+            return cv::Mat();
+        }
+
+        // Fetch latest frame and corresponding metadata
+        cv::Mat latest_frame = frame_queue_.front();
+        frame_queue_.pop();
+
+        // Get metadata for synchronization
+        const FrameMetadata &metadata = metadata_queue_.front();
+        frame_index = metadata.sequence;
+        timestamp_sec = metadata.timestamp;
+        metadata_queue_.pop();
+
+        return latest_frame;
+
+    };
+
 }; // namespace camera_subscriber
