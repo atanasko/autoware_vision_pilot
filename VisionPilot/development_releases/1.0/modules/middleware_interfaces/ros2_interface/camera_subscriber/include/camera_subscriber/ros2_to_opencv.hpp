@@ -17,7 +17,28 @@ namespace camera_subscriber {
     * - Supports various image encodings (RGB, BGR, grayscale, etc.)
     */
 
-    
+    class ROS2ImageSubscriber : public rclcpp::Node {
+
+        public:
+
+            /**
+            * @brief Constructor for ROS2ImageSubscriber
+            *
+            * @param topic_name The name of the ROS2 topic to subscribe to ("/camera/image_raw", etc.)
+            * @param queue_size Max number of frames to buffer for incoming images (default: 10)
+            * @param node_name The name of the ROS2 node (default: "ros2_image_subscriber")
+            *
+            * The node automatically inits the ROS2 subscription and begins listening for incoming messages.
+            */
+            explicit ROS2ImageSubscriber(
+                const std::string& topic_name,
+                size_t queue_size = 10,
+                const std::string& node_name = "ros2_image_subscriber"
+            );
+
+        private:
+
+    };
 
 };
 
