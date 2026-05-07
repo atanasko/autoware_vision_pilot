@@ -15,7 +15,9 @@ Other features:
 - Able to handle multiple encodings, supporting multiple image formats like RGB, Mono, etc.
 - Also some nice statistics of subscription health (frame reception, drop, error metrics etc.).
 
-## II. Architecture
+## II. Architecture & module structure
+
+### 1. Architecture
 
 ```
 
@@ -44,3 +46,70 @@ VisionPilot pipeline (E2E models inference and other processing)
 
 ```
 
+### 2. Module structure
+
+```
+
+camera_subscriber/
+├── CMakeLists.txt
+├── README.md
+├── include/
+│   └── camera_subscriber/
+│       └── ros2_to_opencv.hpp
+└── src/
+    └── ros2_to_opencv.cpp
+
+```
+
+## III. Build
+
+### 1. Prerequisites
+
+- ROS2 (tested on ROS2 Humble / Ubuntu 22.04).
+    - `source /opt/ros/humble/setup.bash`
+- Required packages:
+    - `rclcpp`
+    - `sensor_msgs`
+    - `cv_bridge`
+    - `OpenCV`
+
+### 2. Steps
+
+```bash
+
+# 1. To release root
+d ~/Documents/Autoware/autoware_vision_pilot/VisionPilot/development_releases/1.0
+
+# 2. Create build dir
+mkdir -p build && cd build
+
+# 3. Source ROS2 just in case you forgot to
+source /opt/ros/humble/setup.bash
+
+# 4. CMake configure
+cmake ..
+
+# 5. Compile
+make -j$(nproc)
+
+```
+
+### 3. Expected output
+
+```bash
+
+[ 97%] Building CXX object app/CMakeFiles/VisionPilot.dir/vision_pilot.cpp.o
+[100%] Linking CXX executable ../VisionPilot
+[100%] Built target VisionPilot
+
+```
+
+## IV. Test
+
+This module features ROS2 => OpenCV stream conversion, thus a ROS2 topic publishing images is required.
+
+You can do a simple test using a local video by simply just:
+
+1. Publishing it as ROS2 image messages via [`ros-<distro>-image-publisher](https://docs.ros.org/en/humble/p/image_publisher/).
+
+2. Then, use the provided `VisionPilot/development_releases/auxiliaries/camera_subscriber/video_publisher` to visualize the `cv::Mat` received from the bridge.
