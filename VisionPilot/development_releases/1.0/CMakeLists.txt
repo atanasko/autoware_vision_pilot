@@ -20,7 +20,6 @@ add_subdirectory(modules/middleware_interfaces/ros2_interface/control_cmd_publis
 add_subdirectory(modules/middleware_interfaces/ros2_interface/vehicle_state_subscriber)
 add_subdirectory(modules/middleware_interfaces/ros2_interface/visualization_publisher)
 
-add_subdirectory(modules/engine)
 add_subdirectory(modules/models)
 
 add_subdirectory(modules/safety_guardian/fusion)
