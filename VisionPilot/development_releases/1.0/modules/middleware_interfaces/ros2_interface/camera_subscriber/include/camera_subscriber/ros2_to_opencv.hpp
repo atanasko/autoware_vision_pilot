@@ -162,7 +162,7 @@ namespace camera_subscriber {
                 double timestamp = 0.0;
             };
 
-            
+
             /**
             * @brief Internal callback function invoked when a new ROS2 image message arrives
             * 
@@ -195,6 +195,7 @@ namespace camera_subscriber {
             // Frame buffer with thread safety
             mutable std::mutex frame_mutex;
             std::queue<cv::Mat> frame_queue;
+            std::queue<FrameMetadata> metadata_queue;
             size_t max_queue_size;
 
 
