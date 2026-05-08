@@ -18,6 +18,7 @@ bool render_frame(
 	}
 
 	cv::namedWindow(window_name, cv::WINDOW_NORMAL);
+    cv::resizeWindow(window_name, frame.cols, frame.rows);
 
 	cv::Mat display = frame.clone();
 
