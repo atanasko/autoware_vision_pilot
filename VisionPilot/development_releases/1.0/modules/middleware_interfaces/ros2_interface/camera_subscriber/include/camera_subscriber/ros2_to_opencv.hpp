@@ -6,7 +6,9 @@
 #include <cv_bridge/cv_bridge.h>
 #include <opencv2/opencv.hpp>
 #include <cstdint>
+#include <memory>
 #include <mutex>
+#include <thread>
 #include <tuple>
 
 namespace camera_subscriber {
@@ -17,13 +19,15 @@ namespace camera_subscriber {
     *        converts ROS2 image message to OpenCV image format (cv::Mat).
     * 
     * Features:
-    * - Subscribes to ROS2 image topics (from any source - simulator, camera, hardware, etc.)
-    * - Converts ROS2 image messages to OpenCV cv::Mat format
+    * - Automatically initializes ROS2 (rclcpp::init)
+    * - Creates and manages internal ROS2 node
+    * - Subscribes to ROS2 image topics
+    * - Spins node in background thread
+    * - Converts ROS2 messages to OpenCV cv::Mat format
     * - Thread-safe conversion and data handling
     * - Supports various image encodings (RGB, BGR, grayscale, etc.)
     */
-
-    class ROS2ImageSubscriber : public rclcpp::Node {
+    class ROS2ImageSubscriber {
 
         public:
 
@@ -34,7 +38,7 @@ namespace camera_subscriber {
             * @param topic_name The name of the ROS2 topic to subscribe to ("/camera/image_raw", etc.)
             * @param node_name The name of the ROS2 node (default: "ros2_image_subscriber")
             *
-            * The node automatically inits the ROS2 subscription and begins listening for incoming messages.
+            * Initializes ROS2 (rclcpp::init), creates internal node, subscribes to topic, and starts background spinning.
             */
             explicit ROS2ImageSubscriber(
                 const std::string& topic_name,
@@ -45,9 +49,9 @@ namespace camera_subscriber {
             /**
             * @brief Destructor for ROS2ImageSubscriber
             * 
-            * Cleans up ROS2 subscriptions and resources when the node is destroyed.
+            * Cleans up ROS2 subscriptions, shuts down spinning thread, and shutdowns rclcpp.
             */
-            ~ROS2ImageSubscriber() override = default;
+            ~ROS2ImageSubscriber();
 
 
             // FRAME HANDLINGS
@@ -160,15 +164,15 @@ namespace camera_subscriber {
             );
 
 
-            // ROS2 subscription
+            // ROS2 node and subscription (managed internally)
+            std::shared_ptr<rclcpp::Node> node;
             rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr image_subscription;
-
+            std::thread spin_thread;
 
             // Single latest-frame slot with thread safety
             mutable std::mutex frame_mutex;
             cv::Mat latest_frame;
             bool has_latest_frame = false;
-
 
             // QoS settings for subscription
             // (KeepLast with hardcoded `depth=1` for single-slot retrieval)
