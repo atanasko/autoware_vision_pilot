@@ -117,15 +117,6 @@ namespace v4l2_interface {
             return std::make_tuple(false, cv::Mat());
         }
 
-        if (processed_frame.empty()) {
-            {
-                std::lock_guard<std::mutex> stats_lock(stats_mutex);
-                stats.capture_errors++;
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(5));
-            return std::make_tuple(false, cv::Mat());
-        }
-
         // Store frame in single latest-frame slot with thread safety
         {
             std::lock_guard<std::mutex> lock(frame_mutex);
@@ -136,7 +127,7 @@ namespace v4l2_interface {
             }
 
             // Store latest frame
-            latest_frame = processed_frame.clone();
+            latest_frame = frame.clone();
             has_latest_frame = true;
         }
 
@@ -154,12 +145,12 @@ namespace v4l2_interface {
             
             if (elapsed_ms >= display_frame_period_ms) {
                 last_display_time = now;
-                return std::make_tuple(true, processed_frame);
+                return std::make_tuple(true, frame);
             } else {
                 // Sleep until it's time to display the next frame
                 std::this_thread::sleep_for(std::chrono::milliseconds(display_frame_period_ms - elapsed_ms));
                 last_display_time = std::chrono::steady_clock::now();
-                return std::make_tuple(true, processed_frame);
+                return std::make_tuple(true, frame);
             }
         }
     };
@@ -191,7 +182,7 @@ namespace v4l2_interface {
 
     // Statistics handling
 
-    
+
     V4L2Reader::CaptureStats V4L2Reader::get_stats() const {
         std::lock_guard<std::mutex> lock(stats_mutex);
         return stats;
