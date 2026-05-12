@@ -1,8 +1,6 @@
 #pragma once
 
-#include "models/model_types.hpp"
-#include "models/onnx_session.hpp"
-
+#include <engine/onnx_engine.hpp>
 #include <onnxruntime_cxx_api.h>
 
 #include <memory>
@@ -11,51 +9,49 @@
 
 namespace visionpilot::models {
 
-// ─── Interface ────────────────────────────────────────────────────────────────
-// Abstract base for the AutoDrive two-frame unified model.
-//
-// Preprocessing contract (caller's responsibility before calling infer()):
-//   • Resize both frames to NET_W × NET_H (1024 × 512)
-//   • Convert BGR → RGB
-//   • Normalise with ImageNet stats (mean=[0.485,0.456,0.406],
-//                                    std =[0.229,0.224,0.225])
-//   • Layout: CHW float32, size = 3 × NET_H × NET_W = CHW_SIZE elements
-//
-// Output domain conversion (caller's responsibility after infer()):
-//   distance_m    = D_MAX_M   * (1.0f - out.dist_normalized)   // D_MAX_M = 150.0
-//   curvature_1pm = CURV_SCALE * out.curvature_raw
-class AutoDriveBase {
-public:
-    virtual ~AutoDriveBase() = default;
-
-    // prev_chw / curr_chw : float32 CHW buffers, CHW_SIZE elements each.
-    virtual AutoDriveOutput infer(const float* prev_chw, const float* curr_chw) = 0;
+// ─── Output ───────────────────────────────────────────────────────────────────
+// Raw scalars straight from the model. Domain conversion is the caller's job:
+//   distance_m    = D_MAX_M * (1.0f - dist_normalized)   // D_MAX_M = 150.0
+//   curvature_1pm = curvature_raw * CURV_SCALE
+struct AutoDriveOutput {
+    float dist_normalized = 0.f;  // normalised distance  [0, 1]
+    float curvature_raw   = 0.f;  // raw curvature output
+    float flag_prob       = 0.f;  // sigmoid(flag_logit), CIPO probability [0, 1]
+    bool  valid           = false;
 };
 
-// ─── ONNX Runtime implementation ─────────────────────────────────────────────
-class AutoDriveOnnx final : public AutoDriveBase {
+// ─── Model ────────────────────────────────────────────────────────────────────
+// Two-frame unified model.
+//
+// Preprocessing contract (caller, before infer()):
+//   • Resize both frames to NET_W × NET_H  (1024 × 512)
+//   • Convert BGR → RGB
+//   • Apply ImageNet normalisation:
+//       mean = [0.485, 0.456, 0.406]  std = [0.229, 0.224, 0.225]
+//   • Layout: CHW float32, CHW_SIZE elements each frame
+class AutoDrive {
 public:
     static constexpr int NET_H    = 512;
     static constexpr int NET_W    = 1024;
-    static constexpr int CHW_SIZE = 3 * NET_H * NET_W;  // 1 572 864
+    static constexpr int CHW_SIZE = 3 * NET_H * NET_W;
 
-    explicit AutoDriveOnnx(const OnnxSessionConfig& cfg);
-    ~AutoDriveOnnx() override = default;
+    // engine  — shared OnnxEngine, must outlive this object
+    // model_path — path to the AutoDrive .onnx file
+    AutoDrive(engine::OnnxEngine& engine, const std::string& model_path);
 
-    AutoDriveOutput infer(const float* prev_chw, const float* curr_chw) override;
+    // prev_chw, curr_chw : float32 CHW buffers, CHW_SIZE elements each
+    AutoDriveOutput infer(const float* prev_chw, const float* curr_chw);
 
 private:
-    Ort::Env                       env_;
-    std::unique_ptr<Ort::Session>  session_;
-    Ort::MemoryInfo                mem_info_;
+    std::unique_ptr<Ort::Session> session_;
+    Ort::MemoryInfo               mem_info_;
 
-    std::vector<std::string>  in_name_strs_;
-    std::vector<const char*>  in_names_;
+    std::vector<std::string> in_name_strs_;
+    std::vector<const char*> in_names_;
+    std::vector<std::string> out_name_strs_;
+    std::vector<const char*> out_names_;
 
-    std::vector<std::string>  out_name_strs_;
-    std::vector<const char*>  out_names_;
-
-    std::vector<int64_t>  frame_shape_;  // {1, 3, NET_H, NET_W}
+    std::vector<int64_t> frame_shape_;  // {1, 3, NET_H, NET_W}
 };
 
 }  // namespace visionpilot::models
