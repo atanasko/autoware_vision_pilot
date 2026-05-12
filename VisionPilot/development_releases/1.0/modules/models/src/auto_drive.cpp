@@ -1,50 +1,44 @@
 #include "models/auto_drive.hpp"
 
+#include <array>
 #include <cmath>
 #include <cstdio>
-#include <array>
 
 namespace visionpilot::models {
 
-AutoDriveOnnx::AutoDriveOnnx(const OnnxSessionConfig& cfg)
-    : env_(ORT_LOGGING_LEVEL_WARNING, "AutoDrive")
-    , session_(OnnxSessionFactory::create(env_, cfg))
+AutoDrive::AutoDrive(engine::OnnxEngine& engine, const std::string& model_path)
+    : session_(engine.create_session(model_path, "autodrive_"))
     , mem_info_(Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault))
     , frame_shape_{1, 3, NET_H, NET_W}
 {
     Ort::AllocatorWithDefaultOptions alloc;
-
     const size_t n_in  = session_->GetInputCount();
     const size_t n_out = session_->GetOutputCount();
 
-    // Cache input names (model typically has two inputs: prev frame, curr frame)
     in_name_strs_.resize(n_in);
     in_names_.resize(n_in);
     for (size_t i = 0; i < n_in; ++i) {
         in_name_strs_[i] = session_->GetInputNameAllocated(i, alloc).get();
         in_names_[i]     = in_name_strs_[i].c_str();
-        printf("[AutoDriveOnnx] input[%zu]  = %s\n", i, in_names_[i]);
+        printf("[AutoDrive] input[%zu]  = %s\n", i, in_names_[i]);
     }
 
-    // Cache output names (model has three outputs: dist, curvature, flag_logit)
     out_name_strs_.resize(n_out);
     out_names_.resize(n_out);
     for (size_t i = 0; i < n_out; ++i) {
         out_name_strs_[i] = session_->GetOutputNameAllocated(i, alloc).get();
         out_names_[i]     = out_name_strs_[i].c_str();
-        printf("[AutoDriveOnnx] output[%zu] = %s\n", i, out_names_[i]);
+        printf("[AutoDrive] output[%zu] = %s\n", i, out_names_[i]);
     }
 
-    printf("[AutoDriveOnnx] Initialized — %zu inputs, %zu outputs | "
-           "frame shape [1, 3, %d, %d]\n",
-           n_in, n_out, NET_H, NET_W);
+    printf("[AutoDrive] Ready — %zu inputs, %zu outputs | "
+           "frame [1, 3, %d, %d]\n", n_in, n_out, NET_H, NET_W);
 }
 
-AutoDriveOutput AutoDriveOnnx::infer(const float* prev_chw, const float* curr_chw)
+AutoDriveOutput AutoDrive::infer(const float* prev_chw, const float* curr_chw)
 {
     AutoDriveOutput out;
 
-    // Wrap caller-owned buffers; ORT does not write to input memory.
     std::array<Ort::Value, 2> inputs{
         Ort::Value::CreateTensor<float>(
             mem_info_,
@@ -63,25 +57,19 @@ AutoDriveOutput AutoDriveOnnx::infer(const float* prev_chw, const float* curr_ch
             in_names_.data(),  inputs.data(),    inputs.size(),
             out_names_.data(), out_names_.size());
     } catch (const Ort::Exception& e) {
-        printf("[AutoDriveOnnx] Inference error: %s\n", e.what());
+        printf("[AutoDrive] Inference error: %s\n", e.what());
         return out;
     }
 
     if (results.size() < 3) {
-        printf("[AutoDriveOnnx] Expected 3 outputs, got %zu\n", results.size());
+        printf("[AutoDrive] Expected 3 outputs, got %zu\n", results.size());
         return out;
     }
 
-    // Output 0 — normalised distance [0, 1]
     out.dist_normalized = results[0].GetTensorData<float>()[0];
-
-    // Output 1 — raw curvature (caller multiplies by CURV_SCALE)
-    out.curvature_raw = results[1].GetTensorData<float>()[0];
-
-    // Output 2 — CIPO flag logit → sigmoid probability
+    out.curvature_raw   = results[1].GetTensorData<float>()[0];
     out.flag_prob = 1.f / (1.f + std::exp(-results[2].GetTensorData<float>()[0]));
-
-    out.valid = true;
+    out.valid     = true;
     return out;
 }
 
