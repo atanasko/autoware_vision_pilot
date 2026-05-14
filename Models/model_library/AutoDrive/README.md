@@ -15,14 +15,26 @@ For best results, ensure your inference input follows the training preprocessing
 ### Performance Results
 
 AutoDrive is trained as a multi-task regression/classification model on sequence data with labels for curvature, CIPO distance, and CIPO presence.  
-Please add your official release metrics here once final evaluation is complete.
+
+- Curvature Accuracy: average error of **4 degrees** of steering wheel angle
+- CIPO Presence: **88% accuracy**
+- Distance Accuracy in range bins: 
+
+    5m - 40m (**90%** CIPO distance measurement accuracy) 
+
+    40m - 70m (**91%** CIPO ditance measurement accuracy)
+
+    80m - 100m (**86%** CIPO distance mesaurement accuracy)
+
+    100m - 150m (**72%** CIPO distance measurement accuracy)
 
 ## Model variants
 
-AutoDrive currently uses one primary variant in this repository:
+**AutoDrive model weights:**
 
-**AutoDrive 2.0 model weights - 2:1 aspect ratio, 1024px by 512px input image**
-- [Link to Download Pytorch Model Weights *.pt](<https://drive.google.com/drive/u/1/folders/182h_9eBHroMCOfQHJiXVgrNq7zHx7Qws?dmr=1&ec=wgc-drive-hero-goto>)
+### [Link to Download Pytorch Model Weights *.pth](https://drive.google.com/file/d/1FyyvmGvh4C96nKivsNCUAwf4cnorl_3V/view?usp=drive_link)
+### [Link to Download ONNX FP32 Weights *.onnx](https://drive.google.com/file/d/1GKqhrNP5xtLBRqrcqL9k1IKnwicSL-N8/view?usp=drive_link)
+### [Link to Download ONNX INT8 Weights *.onnx](https://drive.google.com/file/d/1n0NqVnyf2Ry6wlaORyC8-xtTIZhdEhcT/view?usp=drive_link)
 
 ### Notes
 
