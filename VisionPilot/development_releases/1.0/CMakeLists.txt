@@ -21,13 +21,6 @@ find_package(cv_bridge REQUIRED)
 
 find_package(Python3 REQUIRED)
 
-set(Python3_EXECUTABLE /usr/bin/python3.10 CACHE FILEPATH "" FORCE)
-# Homography transformation
-add_custom_target(generate_config ALL
-        COMMAND Python3::Interpreter
-        ${CMAKE_SOURCE_DIR}/scripts/find_homography_C_matrix.py
-)
-
 # Modules
 add_subdirectory(modules/control)
 
@@ -40,6 +33,7 @@ add_subdirectory(modules/middleware_interfaces/ros2_interface/control_cmd_publis
 add_subdirectory(modules/middleware_interfaces/ros2_interface/vehicle_state_subscriber)
 add_subdirectory(modules/middleware_interfaces/ros2_interface/visualization_publisher)
 
+add_subdirectory(modules/engine)
 add_subdirectory(modules/models)
 
 add_subdirectory(modules/safety_guardian/fusion)
