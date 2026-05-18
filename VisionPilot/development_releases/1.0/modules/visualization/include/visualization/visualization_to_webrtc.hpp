@@ -18,7 +18,7 @@ namespace visualization {
 
         public:
             
-        
+
             /**
             * @brief Config options for the WebRTC streamer.
             * Provides parameters for WebRTC connection and streaming behavior.
@@ -123,13 +123,15 @@ namespace visualization {
 
 
         private:
-            // Internal implementation details (e.g., WebRTC connection, encoding, etc.)
-            struct Impl;
-            std::unique_ptr<Impl> impl_;
+
+
+            // Internal implementation details (WebRTC connection, encoding, etc.)
+            std::unique_ptr<Impl> impl;
     
+
         };
 
-}
+};  // namespace visualization
 
 
 #endif //VISIONPILOT_VISUALIZATION_TO_WEBRTC_H
