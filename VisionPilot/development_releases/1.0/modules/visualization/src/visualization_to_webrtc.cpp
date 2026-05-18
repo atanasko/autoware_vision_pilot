@@ -129,6 +129,8 @@ namespace visualization {
 
         explicit Impl(Config config_in) : config(std::move(config_in)) {};
 
+
+        // Helper funcs for WebRTC streaming handling
         bool start();
         bool stop();
         bool push_frame(const cv::Mat& frame);
@@ -140,6 +142,39 @@ namespace visualization {
             const std::string& candidate
         );
         void flush_pending_remote_candidates();
+
+
+        // Config for WebRTC streaming
+        Config config;
+        SoupServer *server = nullptr;
+        GMainLoop *main_loop = nullptr;
+        std::thread server_thread;
+
+
+        // GStreamer elements for WebRTC streaming
+        GstElement *pipeline = nullptr;
+        GstElement *appsrc = nullptr;
+        GstElement *webrtc = nullptr;
+
+
+        // State management for signaling and streaming
+        mutable std::mutex signal_mutex;
+        SoupWebsocketConnection *client_connection = nullptr;
+        std::vector<std::string> pending_signals;
+
+
+        // State management for remote ICE candidates received before remote description is set
+        std::mutex remote_candidate_mutex;
+        std::vector<std::pair<int, std::string>> pending_remote_candidates;
+        std::atomic<bool> remote_description_ready{false};
+
+
+        // State management for streaming
+        std::atomic<bool> running{false};
+        std::atomic<uint64_t> frame_index{0};
+        bool caps_configured = false;
+        int configured_width = 0;
+        int configured_height = 0;
 
     };
 
