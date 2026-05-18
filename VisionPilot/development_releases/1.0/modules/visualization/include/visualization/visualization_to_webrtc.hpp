@@ -35,6 +35,24 @@ namespace visualization {
                 double frame_rate = 10.0;       // Default to 10 FPS
             };
 
+
+            /**
+            * @brief Constructor for WebRTCStreamer.
+            * Inits WebRTC streamer with specified config.
+            *
+            * @param config Config options for WebRTC connection and streaming behavior.
+            */
+            WebRTCStreamer(
+                Config config = Config()
+            );
+
+
+            /**
+            * @brief Destructor for WebRTCStreamer.
+            * Cleans up WebRTC resources and connections.
+            */
+            ~WebRTCStreamer();
+
         private:
             // Internal implementation details (e.g., WebRTC connection, encoding, etc.)
             struct Impl;
