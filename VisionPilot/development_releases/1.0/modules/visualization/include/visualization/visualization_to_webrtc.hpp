@@ -62,6 +62,7 @@ namespace visualization {
             /**
             * @brief Start the WebRTC streaming session.
             * Establishes connection to signaling server and prepares for streaming.
+            *
             * @return true if streaming started successfully, false otherwise
             */
             bool start();
@@ -70,11 +71,47 @@ namespace visualization {
             /**
             * @brief Stop the WebRTC streaming session.
             * Closes WebRTC connections and cleans up resources.
+            *
             * @return true if streaming stopped successfully, false otherwise
             */
             bool stop();
 
             
+            /**
+            * @brief Push a new video frame to the WebRTC stream.
+            * Provides a thread-safe way to send frames to connected WebRTC clients.
+            * 
+            * @param frame The video frame to stream (as cv::Mat)
+            *
+            * @return true if frame was successfully pushed to the stream, false otherwise
+            */
+            bool push_frame(
+                const cv::Mat& frame
+            );
+
+
+            /**
+            * @brief Check if WebRTC stream is currently running.
+            *
+            * @return true if streaming is active, false otherwise
+            */
+            bool is_running() const;
+
+
+            /**
+            * @brief Check if there are any connected WebRTC clients.
+            *
+            * @return true if at least one client is connected, false otherwise
+            */
+            bool has_client() const;
+
+
+            /**
+            * @brief Get URL for browser to connect to WebRTC stream.
+            *
+            * @return Browser URL for WebRTC stream
+            */
+            std::string browser_url() const;
 
         private:
             // Internal implementation details (e.g., WebRTC connection, encoding, etc.)
