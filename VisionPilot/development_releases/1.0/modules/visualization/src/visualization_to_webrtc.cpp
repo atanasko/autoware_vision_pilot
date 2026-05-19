@@ -350,10 +350,10 @@ namespace visualization {
         // Update client connection state in a thread-safe manner
         {
             std::lock_guard<std::mutex> lock(impl->signal_mutex);
-            if (impl->client_connection_ != nullptr) {
-                g_object_unref(impl->client_connection_);
+            if (impl->client_connection != nullptr) {
+                g_object_unref(impl->client_connection);
             }
-            impl->client_connection_ = connection;
+            impl->client_connection = connection;
         }
 
         impl->flush_pending_signals();
@@ -592,9 +592,9 @@ namespace visualization {
         // Thread-safely clean up GStreamer elements and server resources
         {
             std::lock_guard<std::mutex> lock(signal_mutex);
-            if (client_connection_ != nullptr) {
-                g_object_unref(client_connection_);
-                client_connection_ = nullptr;
+            if (client_connection != nullptr) {
+                g_object_unref(client_connection);
+                client_connection = nullptr;
             }
         }
 
@@ -717,6 +717,77 @@ namespace visualization {
 
         return (gst_app_src_push_buffer(GST_APP_SRC(appsrc), buffer) == GST_FLOW_OK);
 
+    };
+
+
+    // Check if there is ctive client connection for streaming
+    bool WebRTCStreamer::Impl::has_client() const
+    {
+
+        std::lock_guard<std::mutex> lock(signal_mutex);
+
+        return (
+            (client_connection != nullptr) && 
+            (soup_websocket_connection_get_state(client_connection) == SOUP_WEBSOCKET_STATE_OPEN)
+        );
+
+    };
+
+
+    // Queue signaling message to be sent to client when connection is available
+    // Or store in pending queue if not ready yet
+    void WebRTCStreamer::Impl::queue_signal(
+        const std::string & signal
+    ) {
+        
+        std::lock_guard<std::mutex> lock(signal_mutex);
+        
+        if (
+            (client_connection != nullptr) && 
+            (soup_websocket_connection_get_state(client_connection) == SOUP_WEBSOCKET_STATE_OPEN)
+        ) {
+            soup_websocket_connection_send_text(
+                client_connection, 
+                signal.c_str()
+            );
+
+            return;
+        }
+
+        pending_signals.push_back(signal);
+
+    }
+
+    
+    // Flush any pending signaling messages that were queued before client connection was ready
+    void WebRTCStreamer::Impl::flush_pending_signals()
+    {
+        
+        std::vector<std::string> queued_signals;
+        SoupWebsocketConnection *connection = nullptr;
+
+        {
+            std::lock_guard<std::mutex> lock(signal_mutex);
+            if (
+                (client_connection == nullptr) || 
+                (soup_websocket_connection_get_state(client_connection) != SOUP_WEBSOCKET_STATE_OPEN) || 
+                (pending_signals.empty())
+            ) {
+                return;
+            }
+
+            queued_signals.swap(pending_signals);
+            connection = client_connection;
+
+        }
+
+        for (const auto & signal : queued_signals) {
+            soup_websocket_connection_send_text(
+                connection, 
+                signal.c_str()
+            );
+        }
+        
     };
 
 }
