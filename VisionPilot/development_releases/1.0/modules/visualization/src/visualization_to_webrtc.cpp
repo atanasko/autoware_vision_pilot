@@ -446,6 +446,126 @@ namespace visualization {
                 candidate
             ));
         };
+
+    };
+
+
+    // Full implementation of WebRTCStreamer
+    bool WebRTCStreamer::Impl::start()
+    {
+        
+        // =========== 1. Init GStreamer (thread-safe)
+        initialize_gstreamer_once();
+
+        // =========== 2. Init SoupServer for signaling
+
+        // a. Init server instance
+        server = soup_server_new(
+            "server-header", 
+            "VisionPilot", 
+            NULL
+        );
+        if (server == nullptr) {
+            return false;
+        };
+            g_printerr("[WebRTCStreamer] soup_server created\n");
+
+        // b. Listen on specified port and handle errors gracefully
+        GError *listen_error = nullptr;
+        if (!soup_server_listen_local(
+            server, 
+            config.port, 
+            SOUP_SERVER_LISTEN_IPV4_ONLY, 
+            &listen_error
+        )) {
+            if (listen_error != nullptr) {
+                g_printerr("[WebRTCStreamer] failed to listen on port %d: %s\n", config.port, listen_error->message);
+                g_error_free(listen_error);
+            } else {
+                g_printerr("[WebRTCStreamer] failed to listen on port %d (unknown error)\n", config.port);
+            }
+            return false;
+        };
+
+        // c. Add HTTP handler for root path and WebSocket handler for signaling
+        soup_server_add_handler(
+            server, 
+            "/", 
+            root_http_handler, 
+            this, 
+            nullptr
+        );
+        soup_server_add_websocket_handler(
+            server, 
+            config.websocket_path.c_str(), 
+            nullptr, 
+            nullptr, 
+            websocket_handler, 
+            this, 
+            nullptr
+        );
+        g_printerr("[WebRTCStreamer] soup_server listening on port %d and handlers installed\n", config.port);
+
+        // =========== 3. Start GMainLoop in a separate thread to handle server events
+        
+        // a. Init and rollout main loop
+        main_loop = g_main_loop_new(nullptr, FALSE);
+        server_thread = std::thread([this]() {
+            g_main_loop_run(main_loop);
+        });
+
+        // b. Wait a lil bit for server to start and print sum status
+        GError *pipeline_error = nullptr;
+        pipeline = gst_parse_launch(
+            "appsrc name=source is-live=true format=time do-timestamp=true block=true ! "
+            "queue leaky=downstream max-size-buffers=2 ! videoconvert ! vp8enc ! "
+            "rtpvp8pay pt=96 ! application/x-rtp,media=video,encoding-name=VP8,payload=96,clock-rate=90000 ! "
+            "webrtcbin name=webrtc bundle-policy=max-bundle",
+            &pipeline_error
+        );
+
+        // c. Handle errors gracefully
+        if (pipeline == nullptr) {
+            if (pipeline_error != nullptr) {
+                g_printerr("[WebRTCStreamer] gst_parse_launch failed: %s\n", pipeline_error->message);
+                g_error_free(pipeline_error);
+            } else {
+                g_printerr("[WebRTCStreamer] gst_parse_launch failed (no error provided)\n");
+            }
+            stop();
+            return false;
+        }
+
+        // d. Get references to appsrc and webrtcbin elements and handle errors gracefully
+        appsrc = gst_bin_get_by_name(GST_BIN(pipeline), "source");
+        webrtc_ = gst_bin_get_by_name(GST_BIN(pipeline), "webrtc");
+        g_printerr("[WebRTCStreamer] pipeline created, appsrc=%p webrtc=%p\n", appsrc, webrtc_);
+
+        if (
+            (appsrc == nullptr) || 
+            (webrtc_ == nullptr)
+        ) {
+            stop();
+            return false;
+        }
+
+        g_object_set(G_OBJECT(appsrc), "block", TRUE, nullptr);
+        g_signal_connect(webrtc_, "on-negotiation-needed", G_CALLBACK(on_negotiation_needed), this);
+        g_signal_connect(webrtc_, "on-ice-candidate", G_CALLBACK(on_ice_candidate), this);
+
+        // =========== 4. Set pipeline to PLAYING state and handle errors gracefully
+
+        if (gst_element_set_state(pipeline, GST_STATE_PLAYING) == GST_STATE_CHANGE_FAILURE) {
+            g_printerr("[WebRTCStreamer] gst_element_set_state PLAYING failed\n");
+            stop();
+            return false;
+        }
+
+        g_printerr("[WebRTCStreamer] pipeline set to PLAYING\n");
+
+        running.store(true, std::memory_order_release);
+
+        return true;
         
     };
 
