@@ -360,4 +360,93 @@ namespace visualization {
 
     };
 
+
+    // Callback for when SDP offer is created to set local description and send offer to client
+    void on_offer_created(
+        GstPromise *promise, 
+        gpointer user_data
+    ) {
+
+        auto *impl = static_cast<WebRTCStreamer::Impl *>(user_data);
+        const GstStructure *reply = gst_promise_get_reply(promise);
+        GstWebRTCSessionDescription *offer = nullptr;
+
+        if (reply != nullptr) {
+            gst_structure_get(
+                reply, 
+                "offer", 
+                GST_TYPE_WEBRTC_SESSION_DESCRIPTION, &offer, 
+                NULL
+            );
+        }
+
+        if (offer == nullptr) {
+            gst_promise_unref(promise);
+            return;
+        }
+
+        g_signal_emit_by_name(
+            impl->webrtc_, 
+            "set-local-description", 
+            offer, 
+            nullptr
+        );
+
+        gchar *sdp_text = gst_sdp_message_as_text(offer->sdp);
+        if (sdp_text != nullptr) {
+            impl->queue_signal(make_offer_message(sdp_text));
+            g_free(sdp_text);
+        }
+
+        gst_webrtc_session_description_free(offer);
+        gst_promise_unref(promise);
+
+    };
+
+
+    // Callback for when negotiation is needed to create a new SDP offer
+    void on_negotiation_needed(
+        GstElement *element, 
+        gpointer user_data
+    ) {
+
+        (void)element;
+
+        auto *impl = static_cast<WebRTCStreamer::Impl *>(user_data);
+        GstPromise *promise = gst_promise_new_with_change_func(
+            on_offer_created, 
+            impl, 
+            nullptr
+        );
+
+        g_signal_emit_by_name(
+            impl->webrtc_, 
+            "create-offer", 
+            nullptr, 
+            promise
+        );
+
+    };
+
+    
+    // Callback for when an ICE candidate is gathered to send it to the client
+    void on_ice_candidate(
+        GstElement *element, 
+        guint mline_index, 
+        gchar *candidate, 
+        gpointer user_data
+    ) {
+        
+        (void)element;
+        auto *impl = static_cast<WebRTCStreamer::Impl *>(user_data);
+
+        if (candidate != nullptr) {
+            impl->queue_signal(make_candidate_message(
+                static_cast<int>(mline_index), 
+                candidate
+            ));
+        };
+        
+    };
+
 }
