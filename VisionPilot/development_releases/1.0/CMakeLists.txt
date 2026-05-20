@@ -21,6 +21,13 @@ find_package(cv_bridge REQUIRED)
 
 find_package(Python3 REQUIRED)
 
+#set(Python3_EXECUTABLE /usr/bin/python3.10 CACHE FILEPATH "" FORCE)
+# Homography transformation
+add_custom_target(generate_config ALL
+        COMMAND Python3::Interpreter
+        ${CMAKE_SOURCE_DIR}/scripts/find_homography_C_matrix.py
+)
+
 # Modules
 add_subdirectory(modules/control)
 
