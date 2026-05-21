@@ -16,6 +16,7 @@ target_include_directories(camera_subscriber
 
 target_link_libraries(camera_subscriber
         PUBLIC
+        camera_interface
         rclcpp::rclcpp
         ${sensor_msgs_LIBRARIES}
         cv_bridge::cv_bridge

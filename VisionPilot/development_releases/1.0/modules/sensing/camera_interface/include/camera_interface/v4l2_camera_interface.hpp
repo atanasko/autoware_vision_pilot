@@ -8,10 +8,11 @@
 #include <string>
 #include <memory>
 #include <iostream>
+#include <camera_interface/camera_interface.hpp>
 
-namespace v4l2_interface {
+namespace camera_interface {
 
-    class V4L2Reader {
+    class V4L2CameraInterface : public CameraInterface {
 
         public:
 
@@ -25,7 +26,7 @@ namespace v4l2_interface {
         * Inits the V4L2 camera device with specified parameters and start capture/vis thread.
         * Also logs these details and subscribtion info.
         */    
-        explicit V4L2Reader(
+        explicit V4L2CameraInterface(
             const std::string& device_path,
             uint32_t fps = 10
         );
@@ -36,7 +37,7 @@ namespace v4l2_interface {
         *
         * Properly cleans up camera resources and closes video capture threads.
         */
-        ~V4L2Reader();
+        ~V4L2CameraInterface();
 
 
         // FRAME HANDLINGS
@@ -95,14 +96,14 @@ namespace v4l2_interface {
         /**
         * @brief Statistics structure for V4L2 capture operations
         */
-        struct CaptureStats {
-            uint64_t frames_captured = 0;      // Total frames successfully captured
-            uint64_t capture_errors = 0;       // Failed frame captures (empty frames)
-            uint32_t current_width = 0;        // Current frame width
-            uint32_t current_height = 0;       // Current frame height
-            double current_fps = 0.0;          // Current FPS setting
-            std::string device_path;           // Device path being used
-        };
+        // struct CaptureStats {
+        //     uint64_t frames_captured = 0;      // Total frames successfully captured
+        //     uint64_t capture_errors = 0;       // Failed frame captures (empty frames)
+        //     uint32_t current_width = 0;        // Current frame width
+        //     uint32_t current_height = 0;       // Current frame height
+        //     double current_fps = 0.0;          // Current FPS setting
+        //     std::string device_path;           // Device path being used
+        // };
 
         /**
         * @brief Get statistics about V4L2 capture operations

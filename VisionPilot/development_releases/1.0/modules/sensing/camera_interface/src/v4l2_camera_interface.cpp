@@ -1,4 +1,4 @@
-#include <v4l2_interface/v4l2_reader.hpp>
+#include "camera_interface/v4l2_camera_interface.hpp"
 
 #include <sstream>
 #include <iomanip>
@@ -6,9 +6,9 @@
 #include <thread>
 
 
-namespace v4l2_interface {
+namespace camera_interface {
 
-    V4L2Reader::V4L2Reader(
+    V4L2CameraInterface::V4L2CameraInterface(
         const std::string& device_path,
         uint32_t fps
     ) : device_path(device_path),
@@ -82,7 +82,7 @@ namespace v4l2_interface {
     };
 
 
-    V4L2Reader::~V4L2Reader() {
+    V4L2CameraInterface::~V4L2CameraInterface() {
         if (camera_capture.isOpened()) {
             camera_capture.release();
             log_info("V4L2 device closed and resources released");
@@ -90,7 +90,7 @@ namespace v4l2_interface {
     };
 
 
-    std::tuple<bool, cv::Mat> V4L2Reader::get_latest_frame() {
+    std::tuple<bool, cv::Mat> V4L2CameraInterface::get_latest_frame() {
         
         if (!camera_capture.isOpened()) {
             {
@@ -156,23 +156,23 @@ namespace v4l2_interface {
     };
 
 
-    bool V4L2Reader::has_frames() const {
+    bool V4L2CameraInterface::has_frames() const {
         std::lock_guard<std::mutex> lock(frame_mutex);
         return has_latest_frame;
     }
 
 
-    bool V4L2Reader::is_stream_active() const {
+    bool V4L2CameraInterface::is_stream_active() const {
         return is_stream_started;
     }
 
 
-    bool V4L2Reader::is_device_open() const {
+    bool V4L2CameraInterface::is_device_open() const {
         return camera_capture.isOpened();
     }
 
 
-    void V4L2Reader::clear_frame_buffer() {
+    void V4L2CameraInterface::clear_frame_buffer() {
         std::lock_guard<std::mutex> lock(frame_mutex);
         latest_frame.release();
         has_latest_frame = false;
@@ -183,13 +183,13 @@ namespace v4l2_interface {
     // Statistics handling
 
 
-    V4L2Reader::CaptureStats V4L2Reader::get_stats() const {
+    V4L2CameraInterface::CaptureStats V4L2CameraInterface::get_stats() const {
         std::lock_guard<std::mutex> lock(stats_mutex);
         return stats;
     }
 
 
-    void V4L2Reader::reset_stats() {
+    void V4L2CameraInterface::reset_stats() {
         std::lock_guard<std::mutex> lock(stats_mutex);
         stats.frames_captured = 0;
         stats.capture_errors = 0;
@@ -199,18 +199,18 @@ namespace v4l2_interface {
 
     // Logging helpers
 
-    void V4L2Reader::log_info(const std::string& message) const {
-        std::cout << "[V4L2Reader INFO] " << message << std::endl;
+    void V4L2CameraInterface::log_info(const std::string& message) const {
+        std::cout << "[V4L2CameraInterface INFO] " << message << std::endl;
     }
 
 
-    void V4L2Reader::log_warning(const std::string& message) const {
-        std::cerr << "[V4L2Reader WARNING] " << message << std::endl;
+    void V4L2CameraInterface::log_warning(const std::string& message) const {
+        std::cerr << "[V4L2CameraInterface WARNING] " << message << std::endl;
     }
 
 
-    void V4L2Reader::log_error(const std::string& message) const {
-        std::cerr << "[V4L2Reader ERROR] " << message << std::endl;
+    void V4L2CameraInterface::log_error(const std::string& message) const {
+        std::cerr << "[V4L2CameraInterface ERROR] " << message << std::endl;
     }
 
 

@@ -2,7 +2,7 @@
 
 #include <algorithm>
 
-namespace camera_subscriber {
+namespace camera_interface {
 
 
     ROS2ImageSubscriber::ROS2ImageSubscriber(
@@ -184,7 +184,7 @@ namespace camera_subscriber {
 
     // Statistics handlings
 
-    ROS2ImageSubscriber::SubscriptionStats ROS2ImageSubscriber::get_stats() const {
+    ROS2ImageSubscriber::CaptureStats ROS2ImageSubscriber::get_stats() const {
         std::lock_guard<std::mutex> lock(stats_mutex);
         return stats;
     }

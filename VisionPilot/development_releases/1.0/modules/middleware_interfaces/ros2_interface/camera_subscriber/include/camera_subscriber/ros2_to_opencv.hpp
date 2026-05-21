@@ -10,14 +10,15 @@
 #include <mutex>
 #include <thread>
 #include <tuple>
+#include <camera_interface/camera_interface.hpp>
 
-namespace camera_subscriber {
+namespace camera_interface {
 
     /**
     * @class ROS2ImageSubscriber
-    * @brief ROS2 node that subscribes to `sensor_msgs/image` topics and 
+    * @brief ROS2 node that subscribes to `sensor_msgs/image` topics and
     *        converts ROS2 image message to OpenCV image format (cv::Mat).
-    * 
+    *
     * Features:
     * - Automatically initializes ROS2 (rclcpp::init)
     * - Creates and manages internal ROS2 node
@@ -27,7 +28,7 @@ namespace camera_subscriber {
     * - Thread-safe conversion and data handling
     * - Supports various image encodings (RGB, BGR, grayscale, etc.)
     */
-    class ROS2ImageSubscriber {
+    class ROS2ImageSubscriber : public CameraInterface {
 
         public:
 
@@ -48,15 +49,15 @@ namespace camera_subscriber {
 
             /**
             * @brief Destructor for ROS2ImageSubscriber
-            * 
+            *
             * Cleans up ROS2 subscriptions, shuts down spinning thread, and shutdowns rclcpp.
             */
             ~ROS2ImageSubscriber();
 
 
             // FRAME HANDLINGS
-      
-            
+
+
             /**
             * @brief Get latest frame with corresponding frame metadata
             *
@@ -70,11 +71,11 @@ namespace camera_subscriber {
 
             // /**
             // * @brief Get latest frame with frame metadata, via timestamp and frame index
-            // * 
+            // *
             // * @param frame_index Output parameter: frame sequence number from ROS2 message
             // * @param timestamp_sec Output parameter: ROS2 timestamp in seconds
             // * @return cv::Mat The image frame, or empty if none available
-            // * 
+            // *
             // * Provides additional timing information along with the frame for synchronization purposes.
             // */
             // cv::Mat get_latest_frame_with_timestamp(
@@ -85,15 +86,16 @@ namespace camera_subscriber {
 
             /**
             * @brief Check if a latest frame is currently available
-            * 
+            *
             * @return true if a frame is available, false otherwise
             */
             bool has_frames() const;
 
+            bool is_device_open() const {return true;}
 
             /**
             * @brief Reset the frame buffer (clear the latest frame slot)
-            * 
+            *
             * Useful for resetting state or handling error conditions
             */
             void clear_frame_buffer();
@@ -101,7 +103,7 @@ namespace camera_subscriber {
 
             /**
             * @brief Check if ROS2 stream is active
-            * 
+            *
             * @return true if stream has started receiving frames, false otherwise
             */
             bool is_stream_active() const;
@@ -112,22 +114,22 @@ namespace camera_subscriber {
 
             /**
             * @brief Get statistics about subscription
-            * 
+            *
             * @return A struct containing:
             *         - frames_received: total frames received from ROS2
             *         - frames_dropped: frames overwritten before retrieval
             *         - conversion_errors: failed ROS2 => OpenCV conversions
             */
-            struct SubscriptionStats {
-                uint64_t frames_received = 0;
-                uint64_t frames_dropped = 0;
-                uint64_t conversion_errors = 0;
-                std::string last_encoding;
-                std::string node_name;
-            };
+            // struct SubscriptionStats {
+            //     uint64_t frames_received = 0;
+            //     uint64_t frames_dropped = 0;
+            //     uint64_t conversion_errors = 0;
+            //     std::string last_encoding;
+            //     std::string node_name;
+            // };
 
 
-            SubscriptionStats get_stats() const;
+            CaptureStats get_stats() const;
 
 
             /**
@@ -141,7 +143,7 @@ namespace camera_subscriber {
 
             /**
             * @brief Internal callback function invoked when a new ROS2 image message arrives
-            * 
+            *
             * Handles thread-safe conversion from sensor_msgs::msg::Image to cv::Mat
             * and updates the latest frame slot for retrieval by the application.
             */
@@ -152,11 +154,11 @@ namespace camera_subscriber {
 
             /**
             * @brief Thread-safe conversion from ROS2 Image message to cv::Mat
-            * 
+            *
             * @param msg The ROS2 image message
             *
             * @return cv::Mat : The converted image, or empty Mat if conversion failed
-            * 
+            *
             * Uses cv_bridge library to handle various ROS2 image encodings.
             */
             cv::Mat convert_ros2_image_to_opencv(
@@ -178,14 +180,14 @@ namespace camera_subscriber {
             // (KeepLast with hardcoded `depth=1` for single-slot retrieval)
             uint8_t qos_history_depth = 1;
 
-            
+
             // Flag for started stream
             bool is_stream_started = false;
 
 
             // Statistics tracking
             mutable std::mutex stats_mutex;
-            SubscriptionStats stats;
+            CaptureStats stats;
 
     };
 
