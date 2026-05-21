@@ -183,9 +183,19 @@ namespace camera_interface {
     // Statistics handling
 
 
-    V4L2CameraInterface::CaptureStats V4L2CameraInterface::get_stats() const {
+    std::vector<std::string> V4L2CameraInterface::get_overlay() const {
         std::lock_guard<std::mutex> lock(stats_mutex);
-        return stats;
+
+        std::vector<std::string> overlay = {
+            "device: " + this->device_path,
+            "frames captured: " + std::to_string(stats.frames_captured),
+            "capture errors: " + std::to_string(stats.capture_errors),
+            "resolution: " + std::to_string(stats.current_width) + "x" +
+            std::to_string(stats.current_height),
+            "fps: " + std::to_string(static_cast<int>(stats.current_fps))
+        };
+
+        return overlay;
     }
 
 

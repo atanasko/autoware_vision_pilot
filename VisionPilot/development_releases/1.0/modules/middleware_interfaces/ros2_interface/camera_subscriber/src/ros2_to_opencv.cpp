@@ -1,6 +1,8 @@
 #include <camera_subscriber/ros2_to_opencv.hpp>
 
 #include <algorithm>
+#include <memory>
+#include <thread>
 
 namespace camera_interface {
 
@@ -8,17 +10,17 @@ namespace camera_interface {
     ROS2ImageSubscriber::ROS2ImageSubscriber(
         const std::string &topic_name,
         const std::string &node_name
-    ) {
+    ) : topic_name(topic_name) {
         // Init ROS2 once
         if (!rclcpp::ok()) {
             static int argc = 1;
             static const char* argv[] = {"ros2_image_subscriber", nullptr};
             rclcpp::init(argc, const_cast<char**>(argv));
         }
-        
+
         // Create internal node
         node = std::make_shared<rclcpp::Node>(node_name);
-        
+
         RCLCPP_INFO(node->get_logger(), "Initializing ROS2 Image Subscriber");
         RCLCPP_INFO(node->get_logger(), "  Topic: %s", topic_name.c_str());
         RCLCPP_INFO(node->get_logger(), "  QoS History Depth: %u", qos_history_depth);
@@ -56,7 +58,7 @@ namespace camera_interface {
     void ROS2ImageSubscriber::image_callback(
         const sensor_msgs::msg::Image::SharedPtr msg
     ) {
-        
+
         // Check incoming msg
         if (!msg) {
             RCLCPP_WARN(node->get_logger(), "Received null image message");
@@ -75,7 +77,7 @@ namespace camera_interface {
             std::lock_guard<std::mutex> lock(stats_mutex);
             stats.conversion_errors++;
             RCLCPP_WARN(
-                node->get_logger(), 
+                node->get_logger(),
                 "Failed to convert ROS2 image to OpenCV (encoding: %s)",
                 msg->encoding.c_str()
             );
@@ -137,11 +139,11 @@ namespace camera_interface {
     };
 
 
-    std::tuple<bool, cv::Mat> ROS2ImageSubscriber::get_latest_frame() 
+    std::tuple<bool, cv::Mat> ROS2ImageSubscriber::get_latest_frame()
     {
 
         std::lock_guard<std::mutex> lock(frame_mutex);
-        
+
         // Check if no frame is currently available
         if (!has_latest_frame) {
             return std::make_tuple(false, cv::Mat());
@@ -181,12 +183,17 @@ namespace camera_interface {
 
     };
 
-
-    // Statistics handlings
-
-    ROS2ImageSubscriber::CaptureStats ROS2ImageSubscriber::get_stats() const {
+    std::vector<std::string> ROS2ImageSubscriber::get_overlay() const {
         std::lock_guard<std::mutex> lock(stats_mutex);
-        return stats;
+
+        std::vector<std::string> overlay = {
+            "topic: " + this->topic_name,
+            "frames received: " + std::to_string(stats.frames_received),
+            "frames dropped: " + std::to_string(stats.frames_dropped),
+            "conversion errors: " + std::to_string(stats.conversion_errors)
+        };
+
+        return overlay;
     }
 
     void ROS2ImageSubscriber::reset_stats() {
@@ -203,7 +210,7 @@ namespace camera_interface {
     ROS2ImageSubscriber::~ROS2ImageSubscriber() {
         // Request node to shutdown
         rclcpp::shutdown();
-        
+
         // Wait for spin thread to finish
         if (spin_thread.joinable()) {
             spin_thread.join();

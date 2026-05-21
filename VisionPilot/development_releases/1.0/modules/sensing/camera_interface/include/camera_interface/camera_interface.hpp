@@ -25,7 +25,7 @@ namespace camera_interface {
 
         virtual bool is_device_open() const = 0;
         virtual std::tuple<bool, cv::Mat> get_latest_frame() = 0;
-        virtual CaptureStats get_stats() const = 0;
+        virtual std::vector<std::string> get_overlay() const = 0;
     };
 }
 
