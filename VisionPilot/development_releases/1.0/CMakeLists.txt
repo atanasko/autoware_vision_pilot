@@ -12,7 +12,7 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 
 
 # ROS2 packages
-option(ENABLE_ROS2_INTERFACE "Enable ROS2 support" ON)
+option(ENABLE_ROS2_INTERFACE "Enable ROS2 support" OFF)
 
 # OpenCV packages
 #find_package(OpenCV REQUIRED)
