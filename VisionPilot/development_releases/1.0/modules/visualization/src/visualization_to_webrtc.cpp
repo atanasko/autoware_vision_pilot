@@ -958,6 +958,25 @@ namespace visualization {
 
     WebRTCStreamer::WebRTCStreamer() : WebRTCStreamer(Config()) {}
 
+    bool WebRTCStreamer::init(Config config)
+    {
+        if (impl != nullptr) {
+            stop();
+        }
+
+        impl = std::make_unique<Impl>(std::move(config));
+        std::cout << "Open browser at: " << browser_url() << "\n";
+
+        return start();
+    }
+
+    bool WebRTCStreamer::init(uint16_t port)
+    {
+        Config config;
+        config.port = port;
+        return init(std::move(config));
+    }
+
     WebRTCStreamer::~WebRTCStreamer()
     {
         

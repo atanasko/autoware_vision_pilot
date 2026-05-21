@@ -48,6 +48,26 @@ namespace visualization {
 
 
             /**
+            * @brief Initialize and start the WebRTC streaming session.
+            * Creates the signaling server, GStreamer pipeline, and browser-facing endpoint.
+            *
+            * @param config Config options for WebRTC connection and streaming behavior.
+            * @return true if initialization succeeded, false otherwise.
+            */
+            bool init(Config config);
+
+
+            /**
+            * @brief Convenience overload that initializes WebRTC with default config,
+            * except for the supplied browser port.
+            *
+            * @param port Browser/signaling server port.
+            * @return true if initialization succeeded, false otherwise.
+            */
+            bool init(uint16_t port);
+
+
+            /**
             * @brief Destructor for WebRTCStreamer.
             * Cleans up WebRTC resources and connections.
             */

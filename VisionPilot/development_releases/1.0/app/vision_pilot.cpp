@@ -112,15 +112,12 @@ int main(int argc, char** argv) {
 
             std::cout << "Starting WebRTC streamer on port: " << webrtc_port << "\n";
 
-            visualization::WebRTCStreamer::Config webrtc_config;
-            webrtc_config.port = webrtc_port;
-            webrtc_streamer = std::make_unique<visualization::WebRTCStreamer>(webrtc_config);
-            if (!webrtc_streamer->start()) {
+            webrtc_streamer = std::make_unique<visualization::WebRTCStreamer>();
+            if (!webrtc_streamer->init(webrtc_port)) {
                 std::cerr << "Failed to start WebRTC streamer." << std::endl;
                 return 1;
             }
 
-            std::cout << "Open browser at: " << webrtc_streamer->browser_url() << "\n";
             std::cout << "Local OpenCV preview is disabled while WebRTC is enabled.\n";
         
         } else {
