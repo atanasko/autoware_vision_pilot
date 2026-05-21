@@ -108,28 +108,7 @@ namespace camera_interface {
             */
             bool is_stream_active() const;
 
-
-            // STATISTICS
-
-
-            /**
-            * @brief Get statistics about subscription
-            *
-            * @return A struct containing:
-            *         - frames_received: total frames received from ROS2
-            *         - frames_dropped: frames overwritten before retrieval
-            *         - conversion_errors: failed ROS2 => OpenCV conversions
-            */
-            // struct SubscriptionStats {
-            //     uint64_t frames_received = 0;
-            //     uint64_t frames_dropped = 0;
-            //     uint64_t conversion_errors = 0;
-            //     std::string last_encoding;
-            //     std::string node_name;
-            // };
-
-
-            CaptureStats get_stats() const;
+            std::vector<std::string> get_overlay() const;
 
 
             /**
@@ -139,7 +118,7 @@ namespace camera_interface {
 
 
         private:
-
+            std::string topic_name;
 
             /**
             * @brief Internal callback function invoked when a new ROS2 image message arrives
